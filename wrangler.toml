@@ -14,7 +14,7 @@ binding = "BOT_KV"
 id = "fa61343228ef41f094d3c00e5023db6f"
 
 [vars]
-BOT_USERNAME = "govd_bot"
+BOT_USERNAME = "patatina_downloader_bot"
 OWNER_ID = "123456789"
 BOT_API_URL = "https://api.telegram.org"
 CONCURRENT_UPDATES = "50"
