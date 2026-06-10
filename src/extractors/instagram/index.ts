@@ -1,4 +1,4 @@
-import { Extractor, MediaFormat, ExtractorContext, Media } from '../../models/index.js';
+import { Extractor, MediaFormat, DownloadSettings, ExtractorContext, Media } from '../../models/index.js';
 import { MediaType, MediaCodec } from '../../database/index.js';
 import { Errors } from '../../util/index.js';
 import logger from '../../logger/index.js';
@@ -7,8 +7,7 @@ const instagramHost: string[] = ['instagram', 'ddinstagram'];
 
 // ── Header sets (mirrored from cobalt) ───────────────────────────────────────
 
-
-const mobileHeaders = {
+const mobileHeaders: Record<string, string> = {
   'x-ig-app-locale': 'en_US',
   'x-ig-device-locale': 'en_US',
   'x-ig-mapped-locale': 'en_US',
@@ -20,10 +19,12 @@ const mobileHeaders = {
   'content-length': '0',
 };
 
-const embedHeaders = {
-  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+const embedHeaders: Record<string, string> = {
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
   'Accept-Language': 'en-GB,en;q=0.9',
   'Cache-Control': 'max-age=0',
+  'Dnt': '1',
+  'Priority': 'u=0, i',
   'Sec-Ch-Ua': '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
   'Sec-Ch-Ua-Mobile': '?0',
   'Sec-Ch-Ua-Platform': '"macOS"',
@@ -32,7 +33,7 @@ const embedHeaders = {
   'Sec-Fetch-Site': 'none',
   'Sec-Fetch-User': '?1',
   'Upgrade-Insecure-Requests': '1',
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
 };
 
 // ── Extractors ────────────────────────────────────────────────────────────────
@@ -74,26 +75,27 @@ export const InstagramShareExtractor = new Extractor({
 
 // ── Mobile API (no auth) ──────────────────────────────────────────────────────
 
-async function getMediaId(ctx: ExtractorContext, shortcode: string): Promise<string | null> {
+async function getMediaId(shortcode: string): Promise<string | null> {
   try {
-    const url = `https://i.instagram.com/api/v1/oembed/?url=${encodeURIComponent('https://www.instagram.com/p/' + shortcode + '/')}`;
-    const resp = await ctx.fetch('GET', url, { headers: mobileHeaders });
-    const id = (resp.data as any)?.media_id;
-    if (id) return id;
+    const url = new URL('https://i.instagram.com/api/v1/oembed/');
+    url.searchParams.set('url', `https://www.instagram.com/p/${shortcode}/`);
+    const resp = await fetch(url, { headers: mobileHeaders });
+    const data = await resp.json() as any;
+    if (data?.media_id) return String(data.media_id);
   } catch {
     // fall through to local decode
   }
-  // Instagram shortcodes are base64url-encoded media IDs — decode locally so
-  // photo/carousel posts work even when oembed doesn't return media_id.
+  // Shortcodes are base64url-encoded media IDs — decode locally as fallback.
   return shortcodeToMediaId(shortcode) || null;
 }
 
-async function requestMobileApi(ctx: ExtractorContext, mediaId: string): Promise<any | null> {
+async function requestMobileApi(mediaId: string): Promise<any | null> {
   try {
-    const resp = await ctx.fetch('GET', `https://i.instagram.com/api/v1/media/${mediaId}/info/`, {
+    const resp = await fetch(`https://i.instagram.com/api/v1/media/${mediaId}/info/`, {
       headers: mobileHeaders,
     });
-    return (resp.data as any)?.items?.[0] ?? null;
+    const data = await resp.json() as any;
+    return data?.items?.[0] ?? null;
   } catch {
     return null;
   }
@@ -101,22 +103,21 @@ async function requestMobileApi(ctx: ExtractorContext, mediaId: string): Promise
 
 // ── Embed HTML (no auth) ──────────────────────────────────────────────────────
 
-async function requestHTML(ctx: ExtractorContext, shortcode: string): Promise<any | null> {
+async function requestHTML(shortcode: string): Promise<any | null> {
   try {
-    const resp = await ctx.fetch('GET', `https://www.instagram.com/p/${shortcode}/embed/captioned/`, {
+    const resp = await fetch(`https://www.instagram.com/p/${shortcode}/embed/captioned/`, {
       headers: embedHeaders,
-      responseType: 'text',
     });
-    const html: string = resp.data;
+    const html = await resp.text();
 
-    // cobalt's pattern: extract the JSON arg from the "init" call
     const match = html.match(/"init",\[\],\[(.*?)\]\],/);
     if (!match) return null;
 
-    let embedData: any = JSON.parse(match[1]);
+    let embedData: any;
+    try { embedData = JSON.parse(match[1]); } catch { return null; }
     if (!embedData?.contextJSON) return null;
 
-    return JSON.parse(embedData.contextJSON);
+    try { return JSON.parse(embedData.contextJSON); } catch { return null; }
   } catch {
     return null;
   }
@@ -134,13 +135,12 @@ function getObjectFromEntries(name: string, data: string): any | null {
   return obj ? JSON.parse(obj) : null;
 }
 
-async function getGQLParams(ctx: ExtractorContext, shortcode: string): Promise<{ headers: Record<string, string>; body: Record<string, any> } | null> {
+async function getGQLParams(shortcode: string): Promise<{ headers: Record<string, string>; body: Record<string, any> } | null> {
   try {
-    const resp = await ctx.fetch('GET', `https://www.instagram.com/p/${shortcode}/`, {
+    const resp = await fetch(`https://www.instagram.com/p/${shortcode}/`, {
       headers: embedHeaders,
-      responseType: 'text',
     });
-    const html: string = resp.data;
+    const html = await resp.text();
 
     const siteData         = getObjectFromEntries('SiteData', html);
     const polarisSiteData  = getObjectFromEntries('PolarisSiteData', html);
@@ -194,14 +194,15 @@ async function getGQLParams(ctx: ExtractorContext, shortcode: string): Promise<{
   }
 }
 
-async function requestGQL(ctx: ExtractorContext, shortcode: string): Promise<{ gql_data: any } | null> {
+async function requestGQL(shortcode: string): Promise<{ gql_data: any } | null> {
   try {
-    const params = await getGQLParams(ctx, shortcode);
+    const params = await getGQLParams(shortcode);
     if (!params) return null;
 
     const { headers, body } = params;
 
-    const resp = await ctx.fetch('POST', 'https://www.instagram.com/graphql/query', {
+    const resp = await fetch('https://www.instagram.com/graphql/query', {
+      method: 'POST',
       headers: {
         ...embedHeaders,
         ...headers,
@@ -223,7 +224,7 @@ async function requestGQL(ctx: ExtractorContext, shortcode: string): Promise<{ g
       }).toString(),
     });
 
-    const data = (resp.data as any)?.data ?? null;
+    const data = (await resp.json() as any)?.data ?? null;
     return data ? { gql_data: data } : null;
   } catch {
     return null;
@@ -240,7 +241,14 @@ interface IgItem {
   height?: number;
 }
 
-// Mobile API format (new)
+// cobalt: hasData — truthy non-null gql_data means we got a GQL/embed response
+function hasData(data: any): boolean {
+  return data != null
+    && data.gql_data !== null
+    && data?.gql_data?.xdt_shortcode_media !== null;
+}
+
+// Mobile API format
 function extractNewPost(data: any): IgItem[] {
   const results: IgItem[] = [];
 
@@ -278,7 +286,7 @@ function extractNewPost(data: any): IgItem[] {
   return results;
 }
 
-// GQL / embed format (old)
+// GQL / embed format
 function extractOldPost(data: any): IgItem[] {
   const results: IgItem[] = [];
   const sm = data?.gql_data?.shortcode_media ?? data?.gql_data?.xdt_shortcode_media ?? data?.media ?? data;
@@ -333,46 +341,39 @@ function extractOldPost(data: any): IgItem[] {
   return results;
 }
 
-// ── Main post fetcher ─────────────────────────────────────────────────────────
+// ── Main post fetcher (mirrors cobalt's getPost flow) ─────────────────────────
 
 async function getPost(ctx: ExtractorContext): Promise<Media> {
   const shortcode = ctx.contentId;
+  let data: any = null;
+
+  try {
+    // get media_id — oembed first, then local decode as fallback
+    const mediaId = await getMediaId(shortcode);
+
+    // mobile api (no cookie)
+    if (mediaId && !hasData(data)) data = await requestMobileApi(mediaId);
+
+    // html embed (no cookie)
+    if (!hasData(data)) data = await requestHTML(shortcode);
+
+    // graphql (anon session tokens from page)
+    if (!hasData(data)) {
+      const gql = await requestGQL(shortcode);
+      if (gql) data = gql;
+    }
+  } catch (e) {
+    logger.warn({ shortcode, err: (e as Error).message }, 'instagram: unexpected error during fetch');
+  }
+
+  // build items from whichever method succeeded
   let items: IgItem[] = [];
-
-  // 1. Mobile API (unauthenticated)
-  const mediaId = await getMediaId(ctx, shortcode);
-  if (mediaId) {
-    const mobileData = await requestMobileApi(ctx, mediaId);
-    if (mobileData) {
-      items = extractNewPost(mobileData);
-      logger.debug({ shortcode }, 'instagram: resolved via mobile API');
-    } else {
-      logger.debug({ shortcode, mediaId }, 'instagram: mobile API returned no data');
-    }
-  } else {
-    logger.debug({ shortcode }, 'instagram: could not determine media_id');
-  }
-
-  // 2. HTML embed page
-  if (!items.length) {
-    const embedData = await requestHTML(ctx, shortcode);
-    if (embedData) {
-      items = extractOldPost({ gql_data: embedData });
-      logger.debug({ shortcode }, 'instagram: resolved via embed page');
-    } else {
-      logger.debug({ shortcode }, 'instagram: embed page returned no data');
-    }
-  }
-
-  // 3. GQL with anon session tokens from page HTML
-  if (!items.length) {
-    const gqlData = await requestGQL(ctx, shortcode);
-    if (gqlData) {
-      items = extractOldPost(gqlData);
-      logger.debug({ shortcode }, 'instagram: resolved via GQL');
-    } else {
-      logger.debug({ shortcode }, 'instagram: GQL returned no data');
-    }
+  if (data?.gql_data != null) {
+    items = extractOldPost(data);
+    logger.debug({ shortcode }, 'instagram: resolved via GQL/embed');
+  } else if (data != null) {
+    items = extractNewPost(data);
+    logger.debug({ shortcode }, 'instagram: resolved via mobile API');
   }
 
   if (!items.length) {
@@ -414,7 +415,7 @@ function randomB64(bytes: number): string {
   return btoa(String.fromCharCode(...arr)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
 }
 
-// Instagram shortcodes are base64url-encoded media IDs using this alphabet.
+// Instagram shortcodes are base64url-encoded media IDs (alphabet A-Za-z0-9-_).
 function shortcodeToMediaId(shortcode: string): string {
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
   let n = 0n;

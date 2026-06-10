@@ -62,25 +62,56 @@ export const TikTokExtractor = new Extractor({
 });
 
 async function getMedia(ctx: ExtractorContext): Promise<Media> {
-  let detail: TikTokItemStruct | undefined;
-  let cookieHeader = '';
-  let lastErr: Error | undefined;
+  // cobalt: always use @i/video/ path, even for photo posts
+  const res = await fetch(`https://www.tiktok.com/@i/video/${ctx.contentId}`, {
+    headers: {
+      'user-agent': UA_FULL,
+      'accept-language': 'en-US,en;q=0.9',
+      'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'referer': 'https://www.tiktok.com/',
+    },
+  });
 
-  for (let attempt = 0; attempt < 5; attempt++) {
-    try {
-      [detail, cookieHeader] = await fetchVideoDetail(ctx.contentId, cookieHeader);
-      lastErr = undefined;
-      break;
-    } catch (e) {
-      lastErr = e as Error;
-      logger.warn({ attempt: attempt + 1, err: lastErr.message }, 'tiktok: fetch attempt failed');
+  // Accumulate cookies for CDN auth
+  const cookieHeader = mergeCookies('', getSetCookies(res.headers));
+
+  const html = await res.text();
+
+  let detail: TikTokItemStruct;
+  try {
+    const json = html
+      .split('<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application/json">')[1]
+      ?.split('</script>')[0];
+
+    if (!json) {
+      logger.warn({ status: res.status, snippet: html.slice(0, 400) }, 'tiktok: universal data script not found');
+      throw new Error('universal data script not found');
     }
-  }
 
-  if (!detail) throw new Error(`tiktok: all attempts failed — ${lastErr?.message}`);
+    const data = JSON.parse(json) as Record<string, unknown>;
+    const scope = data['__DEFAULT_SCOPE__'] as Record<string, unknown>;
+    const videoDetail = scope?.['webapp.video-detail'] as TikTokVideoDetail | undefined;
+
+    if (!videoDetail) throw new Error('webapp.video-detail not found');
+    if (videoDetail.statusMsg) throw Errors.Unavailable;
+
+    const itemStruct = videoDetail.itemInfo?.itemStruct;
+    if (!itemStruct) throw new Error('itemStruct not found');
+    if (videoDetail.itemInfo?.statusMsg) throw Errors.Unavailable;
+
+    detail = itemStruct;
+  } catch (e) {
+    if ((e as { id?: string }).id) throw e;
+    throw new Error(`tiktok: parse error — ${(e as Error).message}`);
+  }
 
   const media = ctx.newMedia();
   media.setCaption(detail.desc ?? '');
+
+  const downloadHeaders: Record<string, string> = {
+    Referer: 'https://www.tiktok.com/',
+    ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+  };
 
   const isImageSlide = !!detail.imagePost;
 
@@ -88,7 +119,7 @@ async function getMedia(ctx: ExtractorContext): Promise<Media> {
     const video = detail.video;
     if (!video?.playAddr) throw Errors.Unavailable;
 
-    // Prefer H.264 from bitrateInfo (reliable CDN URLs); fall back to H.265, then playAddr
+    // Prefer H.264 from bitrateInfo; fall back to H.265, then playAddr
     const bitrateEntries = video.bitrateInfo ?? [];
     const h264Entry = bitrateEntries.find(
       b => b.CodecType && !b.CodecType.includes('h265') && !b.CodecType.includes('bytevc1')
@@ -110,92 +141,39 @@ async function getMedia(ctx: ExtractorContext): Promise<Media> {
     mf.type = MediaType.Video;
     mf.formatId = video.playAddr.uri || 'video';
     mf.url = urls;
-    mf.videoCodec = MediaCodec.Avc;  // always AVC so Telegram sends as video, not document
+    mf.videoCodec = MediaCodec.Avc;
     mf.audioCodec = MediaCodec.Aac;
     mf.width = video.playAddr.width ?? 0;
     mf.height = video.playAddr.height ?? 0;
     mf.duration = video.duration ?? 0;
-    mf.downloadSettings = new DownloadSettings({
-      headers: {
-        Referer: 'https://www.tiktok.com/',
-        ...(cookieHeader ? { Cookie: cookieHeader } : {}),
-      },
-    });
+    mf.downloadSettings = new DownloadSettings({ headers: downloadHeaders });
     item.addFormats(mf);
   } else {
-    // cobalt: image URL is under imageURL.urlList (not url.urlList)
+    // cobalt: prefer .jpeg? URLs from the urlList for each image
     for (const image of (detail.imagePost?.images ?? [])) {
       const urlList = image.imageURL?.urlList ?? [];
       if (!urlList.length) continue;
+
+      // cobalt: pick the .jpeg? URL; fall back to first URL if none found
+      const url = urlList.find(u => u.includes('.jpeg?')) ?? urlList[0];
+      if (!url) continue;
+
       const item = media.newItem();
       const mf = new MediaFormat();
       mf.type = MediaType.Photo;
       mf.formatId = 'image';
-      mf.url = urlList;
-      mf.downloadSettings = new DownloadSettings({
-        headers: {
-          Referer: 'https://www.tiktok.com/',
-          ...(cookieHeader ? { Cookie: cookieHeader } : {}),
-        },
-      });
+      mf.url = [url];
+      mf.downloadSettings = new DownloadSettings({ headers: downloadHeaders });
       item.addFormats(mf);
     }
   }
 
+  if (!media.items.length) throw Errors.Unavailable;
+
   return media;
 }
 
-async function fetchVideoDetail(videoId: string, existingCookies: string): Promise<[TikTokItemStruct, string]> {
-  // cobalt uses @i/video/ — more reliable than @placeholder/video/
-  const res = await fetch(`https://www.tiktok.com/@i/video/${videoId}`, {
-    headers: {
-      'user-agent': UA_FULL,
-      'accept-language': 'en-US,en;q=0.9',
-      'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      'referer': 'https://www.tiktok.com/',
-      ...(existingCookies ? { cookie: existingCookies } : {}),
-    },
-  });
-
-  // Accumulate cookies for download auth
-  const updatedCookies = mergeCookies(existingCookies, getSetCookies(res.headers));
-
-  const html = await res.text();
-
-  let detail: TikTokItemStruct;
-  try {
-    // cobalt uses split() — avoids regex backtracking on large HTML
-    const json = html
-      .split('<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application/json">')[1]
-      ?.split('</script>')[0];
-
-    if (!json) {
-      logger.warn({ status: res.status, snippet: html.slice(0, 400) }, 'tiktok: universal data script not found');
-      throw new Error('universal data script not found');
-    }
-
-    const data = JSON.parse(json) as Record<string, unknown>;
-    const scope = data['__DEFAULT_SCOPE__'] as Record<string, unknown>;
-    const videoDetail = scope?.['webapp.video-detail'] as TikTokVideoDetail | undefined;
-
-    if (!videoDetail) throw new Error('webapp.video-detail not found');
-    if (videoDetail.statusMsg) throw Errors.Unavailable; // deleted / restricted
-
-    const itemStruct = videoDetail.itemInfo?.itemStruct;
-    if (!itemStruct) throw new Error('itemStruct not found');
-    if (videoDetail.itemInfo?.statusMsg) throw Errors.Unavailable;
-
-    detail = itemStruct;
-  } catch (e) {
-    if ((e as { id?: string }).id) throw e;
-    throw new Error(`parse error: ${(e as Error).message}`);
-  }
-
-  return [detail, updatedCookies];
-}
-
 function getSetCookies(headers: Headers): string[] {
-  // getSetCookie() is a modern Web API available in CF Workers
   if (typeof (headers as unknown as { getSetCookie?: () => string[] }).getSetCookie === 'function') {
     return (headers as unknown as { getSetCookie(): string[] }).getSetCookie();
   }
