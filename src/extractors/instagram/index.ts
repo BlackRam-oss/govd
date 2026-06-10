@@ -78,10 +78,14 @@ async function getMediaId(ctx: ExtractorContext, shortcode: string): Promise<str
   try {
     const url = `https://i.instagram.com/api/v1/oembed/?url=${encodeURIComponent('https://www.instagram.com/p/' + shortcode + '/')}`;
     const resp = await ctx.fetch('GET', url, { headers: mobileHeaders });
-    return (resp.data as any)?.media_id ?? null;
+    const id = (resp.data as any)?.media_id;
+    if (id) return id;
   } catch {
-    return null;
+    // fall through to local decode
   }
+  // Instagram shortcodes are base64url-encoded media IDs — decode locally so
+  // photo/carousel posts work even when oembed doesn't return media_id.
+  return shortcodeToMediaId(shortcode) || null;
 }
 
 async function requestMobileApi(ctx: ExtractorContext, mediaId: string): Promise<any | null> {
@@ -342,7 +346,11 @@ async function getPost(ctx: ExtractorContext): Promise<Media> {
     if (mobileData) {
       items = extractNewPost(mobileData);
       logger.debug({ shortcode }, 'instagram: resolved via mobile API');
+    } else {
+      logger.debug({ shortcode, mediaId }, 'instagram: mobile API returned no data');
     }
+  } else {
+    logger.debug({ shortcode }, 'instagram: could not determine media_id');
   }
 
   // 2. HTML embed page
@@ -351,6 +359,8 @@ async function getPost(ctx: ExtractorContext): Promise<Media> {
     if (embedData) {
       items = extractOldPost({ gql_data: embedData });
       logger.debug({ shortcode }, 'instagram: resolved via embed page');
+    } else {
+      logger.debug({ shortcode }, 'instagram: embed page returned no data');
     }
   }
 
@@ -360,6 +370,8 @@ async function getPost(ctx: ExtractorContext): Promise<Media> {
     if (gqlData) {
       items = extractOldPost(gqlData);
       logger.debug({ shortcode }, 'instagram: resolved via GQL');
+    } else {
+      logger.debug({ shortcode }, 'instagram: GQL returned no data');
     }
   }
 
@@ -400,4 +412,16 @@ function randomB64(bytes: number): string {
   const arr = new Uint8Array(bytes);
   crypto.getRandomValues(arr);
   return btoa(String.fromCharCode(...arr)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+}
+
+// Instagram shortcodes are base64url-encoded media IDs using this alphabet.
+function shortcodeToMediaId(shortcode: string): string {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+  let n = 0n;
+  for (const c of shortcode) {
+    const idx = alphabet.indexOf(c);
+    if (idx < 0) return '';
+    n = n * 64n + BigInt(idx);
+  }
+  return n.toString();
 }

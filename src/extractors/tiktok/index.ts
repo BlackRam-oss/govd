@@ -132,6 +132,12 @@ async function getMedia(ctx: ExtractorContext): Promise<Media> {
       mf.type = MediaType.Photo;
       mf.formatId = 'image';
       mf.url = urlList;
+      mf.downloadSettings = new DownloadSettings({
+        headers: {
+          Referer: 'https://www.tiktok.com/',
+          ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+        },
+      });
       item.addFormats(mf);
     }
   }
