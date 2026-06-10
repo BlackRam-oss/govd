@@ -1,0 +1,16 @@
+name = "govd"
+main = "src/index.ts"          # <-- cambia se il tuo entry point è diverso (es. dist/index.js)
+compatibility_date = "2026-06-10"
+
+[[kv_namespaces]]
+binding = "BOT_KV"
+id = "56a6c8a1b11a4c0a8b0b4a2e9d1f9e3d"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "govd-db"      # <-- verifica il nome esatto nel database D1
+database_id = "2c5d4e8a-9b1c-4f2d-a3e5-6b7c8d9e0f1a"
+
+[vars]
+BOT_USERNAME = "govd_bot"
+OWNER_ID = "123456789"
