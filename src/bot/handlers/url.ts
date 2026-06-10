@@ -56,6 +56,5 @@ export function getChatFromCtx(ctx: Context): ChatRow | null {
     Env.DefaultSilent,
     Env.DefaultNSFW,
     Env.DefaultMediaAlbumLimit,
-    Env.DefaultDeleteLinks,
   );
 }

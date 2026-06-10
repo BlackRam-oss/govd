@@ -30,7 +30,6 @@ export interface ChatRow {
   silent: boolean;
   language: string;
   disabledExtractors: string[];
-  deleteLinks: boolean;
 }
 
 export interface MediaRow {
@@ -116,7 +115,6 @@ function defaultSettings(
   silent: boolean,
   nsfw: boolean,
   mediaAlbumLimit: number,
-  deleteLinks: boolean,
 ): ChatRow {
   return {
     chatId,
@@ -127,7 +125,6 @@ function defaultSettings(
     silent,
     language,
     disabledExtractors: [],
-    deleteLinks,
   };
 }
 
@@ -145,7 +142,6 @@ export function getOrCreateChat(
   silent: boolean,
   nsfw: boolean,
   mediaAlbumLimit: number,
-  deleteLinks: boolean,
 ): ChatRow {
   const key = chatKey(chatId);
   if (chatStore.has(key)) {
@@ -158,7 +154,7 @@ export function getOrCreateChat(
     return existing;
   }
 
-  const row = defaultSettings(chatId, type, language, captions, silent, nsfw, mediaAlbumLimit, deleteLinks);
+  const row = defaultSettings(chatId, type, language, captions, silent, nsfw, mediaAlbumLimit);
   chatStore.set(key, row);
 
   if (type === ChatType.Private) {
@@ -291,11 +287,6 @@ export function toggleChatSilentMode(chatId: number): void {
   if (c) { c.silent = !c.silent; }
 }
 
-export function toggleChatDeleteLinks(chatId: number): void {
-  const c = getChat(chatId);
-  if (c) { c.deleteLinks = !c.deleteLinks; }
-}
-
 export function setChatLanguage(chatId: number, language: string): void {
   const c = getChat(chatId);
   if (c) { c.language = language; }
@@ -361,7 +352,6 @@ export default {
   toggleChatCaptions,
   toggleChatNsfw,
   toggleChatSilentMode,
-  toggleChatDeleteLinks,
   setChatLanguage,
   setChatMediaAlbumLimit,
   addDisabledExtractor,

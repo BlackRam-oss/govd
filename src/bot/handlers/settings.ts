@@ -70,11 +70,6 @@ export async function settingsOptionsHandler(ctx: Context): Promise<void> {
       await ctx.editMessageText(t('DisabledExtractorsSettingsMessage', lang), { reply_markup: keyboard });
       break;
     }
-    case 'delete_links': {
-      const keyboard = buildToggleKeyboard('delete_links', chat?.deleteLinks ?? false, lang);
-      await ctx.editMessageText(t('DeleteLinksSettingsMessage', lang), { reply_markup: keyboard });
-      break;
-    }
   }
 }
 
@@ -91,7 +86,6 @@ export async function settingsToggleHandler(ctx: Context): Promise<void> {
       case 'captions': db.toggleChatCaptions(chatId); break;
       case 'nsfw': db.toggleChatNsfw(chatId); break;
       case 'silent': db.toggleChatSilentMode(chatId); break;
-      case 'delete_links': db.toggleChatDeleteLinks(chatId); break;
     }
   }
 
@@ -154,7 +148,6 @@ function buildSettingsKeyboard(chat: ChatRow, lang: string, isGroup: boolean): I
   if (isGroup) {
     rows.push([{ text: `🔞 ${t('NsfwButton', lang)} ${onOff(chat.nsfw)}`, callback_data: 'settings.options.nsfw' }]);
     rows.push([{ text: `📸 ${t('MediaAlbumButton', lang)} → ${chat.mediaAlbumLimit}`, callback_data: 'settings.options.media_album' }]);
-    rows.push([{ text: `🔗 ${t('DeleteLinksButton', lang)} ${onOff(chat.deleteLinks)}`, callback_data: 'settings.options.delete_links' }]);
     rows.push([{ text: `🔌 ${t('ExtractorsButton', lang)}`, callback_data: 'settings.options.extractors' }]);
   }
 

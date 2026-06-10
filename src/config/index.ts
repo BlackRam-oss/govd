@@ -61,7 +61,6 @@ interface EnvConfig {
   DefaultNSFW: boolean;
   DefaultMediaAlbumLimit: number;
   DefaultLanguage: string;
-  DefaultDeleteLinks: boolean;
 
   AutomaticLanguageDetection: boolean;
 
@@ -103,7 +102,6 @@ export const Env: EnvConfig = {
   DefaultNSFW: parseBoolEnv('DEFAULT_ENABLE_NSFW', false),
   DefaultMediaAlbumLimit: parseIntEnv('DEFAULT_MEDIA_ALBUM_LIMIT', 10),
   DefaultLanguage: process.env.DEFAULT_LANGUAGE || 'en',
-  DefaultDeleteLinks: parseBoolEnv('DEFAULT_DELETE_LINKS', false),
 
   AutomaticLanguageDetection: parseBoolEnv('AUTOMATIC_LANGUAGE_DETECTION', true),
 

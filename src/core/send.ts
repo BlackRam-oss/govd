@@ -76,7 +76,7 @@ export async function sendFormats(
 
   if (!sentMessages.length) throw new Error('no messages sent');
 
-  if (chat && chat.deleteLinks && ctx.message) {
+  if (ctx.message) {
     bot.api.deleteMessage(chatId!, ctx.message.message_id).catch((err: Error) => {
       logger.warn({ chatId, err: err.message }, 'failed to delete link message');
     });
