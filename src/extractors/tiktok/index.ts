@@ -88,8 +88,21 @@ async function getMedia(ctx: ExtractorContext): Promise<Media> {
     const video = detail.video;
     if (!video?.playAddr) throw Errors.Unavailable;
 
-    // Use H.264 from playAddr — Telegram renders it as Video (HEVC would be sent as Document)
-    const urls = video.playAddr.urlList ?? [];
+    // Prefer H.264 from bitrateInfo (reliable CDN URLs); fall back to H.265, then playAddr
+    const bitrateEntries = video.bitrateInfo ?? [];
+    const h264Entry = bitrateEntries.find(
+      b => b.CodecType && !b.CodecType.includes('h265') && !b.CodecType.includes('bytevc1')
+    );
+    const h265Entry = bitrateEntries.find(
+      b => b.CodecType?.includes('h265') || b.CodecType?.includes('bytevc1')
+    );
+
+    const bestEntry = h264Entry ?? h265Entry;
+    const urls: string[] =
+      bestEntry?.PlayAddr?.UrlList?.length
+        ? bestEntry.PlayAddr.UrlList
+        : (video.playAddr.urlList ?? []);
+
     if (!urls.length) throw Errors.Unavailable;
 
     const item = media.newItem();
@@ -97,7 +110,7 @@ async function getMedia(ctx: ExtractorContext): Promise<Media> {
     mf.type = MediaType.Video;
     mf.formatId = video.playAddr.uri || 'video';
     mf.url = urls;
-    mf.videoCodec = MediaCodec.Avc;
+    mf.videoCodec = MediaCodec.Avc;  // always AVC so Telegram sends as video, not document
     mf.audioCodec = MediaCodec.Aac;
     mf.width = video.playAddr.width ?? 0;
     mf.height = video.playAddr.height ?? 0;
