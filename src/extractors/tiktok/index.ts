@@ -2,6 +2,7 @@ import { Extractor, MediaFormat, DownloadSettings, ExtractorContext, Media } fro
 import { MediaType, MediaCodec } from '../../database/index.js';
 import { Errors } from '../../util/index.js';
 import { Cookie } from '../../networking/index.js';
+import logger from '../../logger/index.js';
 
 export const TikTokVMExtractor = new Extractor({
   id: 'tiktok',
@@ -10,8 +11,7 @@ export const TikTokVMExtractor = new Extractor({
   host: ['tiktok', 'vxtiktok'],
   redirect: true,
   async getFunc(ctx: ExtractorContext): Promise<{ media?: Media; url?: string }> {
-    const resp = await ctx.fetch('GET', ctx.contentUrl);
-    const redirectUrl = resp.request?.res?.responseUrl || resp.config?.url || ctx.contentUrl;
+    const redirectUrl = await ctx.fetchLocation(ctx.contentUrl);
 
     let url: string;
     try {
@@ -52,6 +52,7 @@ async function getMedia(ctx: ExtractorContext): Promise<Media> {
       break;
     } catch (e) {
       err = e as Error;
+      logger.warn({ attempt: i + 1, err: err.message }, 'tiktok: getVideoWeb failed');
     }
   }
   if (err) throw new Error(`failed to get from web: ${err.message}`);
@@ -110,7 +111,10 @@ async function getVideoWeb(ctx: ExtractorContext): Promise<[TikTokItemStruct, Co
   const html = resp.data as string;
 
   const match = html.match(/<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>([\s\S]*?)<\/script>/);
-  if (!match) throw new Error('universal data not found');
+  if (!match) {
+    logger.warn({ status: resp.status, htmlSnippet: html.slice(0, 300) }, 'tiktok: universal data not found');
+    throw new Error('universal data not found');
+  }
 
   let parsed: unknown;
   try {

@@ -263,9 +263,9 @@ export class ExtractorContext {
     return this.httpClient.fetch(method, url, params);
   }
 
-  async fetchLocation(url: string, params: FetchParams = {}): Promise<string> {
-    const resp = await this.fetch('GET', url, params) as any;
-    return resp.request?.res?.responseUrl || resp.config?.url || url;
+  async fetchLocation(url: string): Promise<string> {
+    const resp = await fetch(url, { redirect: 'follow' });
+    return resp.url || url;
   }
 }
 
