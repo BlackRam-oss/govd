@@ -67,7 +67,9 @@ export async function sendFormats(
 
     if (options.delete) {
       for (const m of msgs) {
-        bot.api.deleteMessage(chatId!, m.message_id).catch(() => {});
+        bot.api.deleteMessage(chatId!, m.message_id).catch((err: Error) => {
+          logger.warn({ err: err.message }, 'failed to delete sent message');
+        });
       }
     }
   }
@@ -75,7 +77,9 @@ export async function sendFormats(
   if (!sentMessages.length) throw new Error('no messages sent');
 
   if (chat && chat.deleteLinks && ctx.message) {
-    bot.api.deleteMessage(chatId!, ctx.message.message_id).catch(() => {});
+    bot.api.deleteMessage(chatId!, ctx.message.message_id).catch((err: Error) => {
+      logger.warn({ chatId, err: err.message }, 'failed to delete link message');
+    });
   }
 
   if (!options.isStored && Env.Caching) {

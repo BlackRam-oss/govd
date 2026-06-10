@@ -1,4 +1,3 @@
-import { instagramGetUrl } from 'instagram-url-direct';
 import { Extractor, MediaFormat, ExtractorContext, Media } from '../../models/index.js';
 import { MediaType, MediaCodec } from '../../database/index.js';
 import { Errors } from '../../util/index.js';
@@ -6,13 +5,45 @@ import logger from '../../logger/index.js';
 
 const instagramHost: string[] = ['instagram', 'ddinstagram'];
 
+// ── Header sets (mirrored from cobalt) ───────────────────────────────────────
+
+
+const mobileHeaders = {
+  'x-ig-app-locale': 'en_US',
+  'x-ig-device-locale': 'en_US',
+  'x-ig-mapped-locale': 'en_US',
+  'user-agent': 'Instagram 275.0.0.27.98 Android (33/13; 280dpi; 720x1423; Xiaomi; Redmi 7; onclite; qcom; en_US; 458229237)',
+  'accept-language': 'en-US',
+  'x-fb-http-engine': 'Liger',
+  'x-fb-client-ip': 'True',
+  'x-fb-server-cluster': 'True',
+  'content-length': '0',
+};
+
+const embedHeaders = {
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+  'Accept-Language': 'en-GB,en;q=0.9',
+  'Cache-Control': 'max-age=0',
+  'Sec-Ch-Ua': '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+  'Sec-Ch-Ua-Mobile': '?0',
+  'Sec-Ch-Ua-Platform': '"macOS"',
+  'Sec-Fetch-Dest': 'document',
+  'Sec-Fetch-Mode': 'navigate',
+  'Sec-Fetch-Site': 'none',
+  'Sec-Fetch-User': '?1',
+  'Upgrade-Insecure-Requests': '1',
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+};
+
+// ── Extractors ────────────────────────────────────────────────────────────────
+
 export const InstagramExtractor = new Extractor({
   id: 'instagram',
   displayName: 'Instagram',
   urlPattern: /https:\/\/(www\.)?(?:dd)?instagram\.com\/(reels?|p|tv)\/(?<id>[a-zA-Z0-9_-]+)/,
   host: instagramHost,
   async getFunc(ctx: ExtractorContext): Promise<{ media?: Media; url?: string }> {
-    const media = await getMedia(ctx);
+    const media = await getPost(ctx);
     return { media };
   },
 });
@@ -24,7 +55,7 @@ export const InstagramStoriesExtractor = new Extractor({
   host: instagramHost,
   hidden: true,
   async getFunc(ctx: ExtractorContext): Promise<{ media?: Media; url?: string }> {
-    const media = await getMedia(ctx);
+    const media = await getPost(ctx);
     return { media };
   },
 });
@@ -41,45 +72,332 @@ export const InstagramShareExtractor = new Extractor({
   },
 });
 
-async function getMedia(ctx: ExtractorContext): Promise<Media> {
-  logger.debug({ url: ctx.contentUrl }, 'instagram: fetching via instagram-url-direct');
+// ── Mobile API (no auth) ──────────────────────────────────────────────────────
 
-  let response: Awaited<ReturnType<typeof instagramGetUrl>>;
+async function getMediaId(ctx: ExtractorContext, shortcode: string): Promise<string | null> {
   try {
-    response = await instagramGetUrl(ctx.contentUrl, { retries: 3, delay: 500 });
-  } catch (e) {
-    logger.warn({ err: (e as Error).message }, 'instagram: instagramGetUrl failed');
-    throw new Error(`instagram-url-direct failed: ${(e as Error).message}`);
+    const url = `https://i.instagram.com/api/v1/oembed/?url=${encodeURIComponent('https://www.instagram.com/p/' + shortcode + '/')}`;
+    const resp = await ctx.fetch('GET', url, { headers: mobileHeaders });
+    return (resp.data as any)?.media_id ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function requestMobileApi(ctx: ExtractorContext, mediaId: string): Promise<any | null> {
+  try {
+    const resp = await ctx.fetch('GET', `https://i.instagram.com/api/v1/media/${mediaId}/info/`, {
+      headers: mobileHeaders,
+    });
+    return (resp.data as any)?.items?.[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// ── Embed HTML (no auth) ──────────────────────────────────────────────────────
+
+async function requestHTML(ctx: ExtractorContext, shortcode: string): Promise<any | null> {
+  try {
+    const resp = await ctx.fetch('GET', `https://www.instagram.com/p/${shortcode}/embed/captioned/`, {
+      headers: embedHeaders,
+      responseType: 'text',
+    });
+    const html: string = resp.data;
+
+    // cobalt's pattern: extract the JSON arg from the "init" call
+    const match = html.match(/"init",\[\],\[(.*?)\]\],/);
+    if (!match) return null;
+
+    let embedData: any = JSON.parse(match[1]);
+    if (!embedData?.contextJSON) return null;
+
+    return JSON.parse(embedData.contextJSON);
+  } catch {
+    return null;
+  }
+}
+
+// ── GQL (no stored cookie — builds anon session from page HTML) ───────────────
+
+function getNumberFromQuery(name: string, data: string): number | undefined {
+  const s = data.match(new RegExp(name + '=(\\d+)'))?.[1];
+  if (s && +s) return +s;
+}
+
+function getObjectFromEntries(name: string, data: string): any | null {
+  const obj = data.match(new RegExp('\\["' + name + '",.*?,({.*?}),\\d+\\]'))?.[1];
+  return obj ? JSON.parse(obj) : null;
+}
+
+async function getGQLParams(ctx: ExtractorContext, shortcode: string): Promise<{ headers: Record<string, string>; body: Record<string, any> } | null> {
+  try {
+    const resp = await ctx.fetch('GET', `https://www.instagram.com/p/${shortcode}/`, {
+      headers: embedHeaders,
+      responseType: 'text',
+    });
+    const html: string = resp.data;
+
+    const siteData         = getObjectFromEntries('SiteData', html);
+    const polarisSiteData  = getObjectFromEntries('PolarisSiteData', html);
+    const webConfig        = getObjectFromEntries('DGWWebConfig', html);
+    const pushInfo         = getObjectFromEntries('InstagramWebPushInfo', html);
+    const lsd              = getObjectFromEntries('LSD', html)?.token ?? randomB64(8);
+    const csrf             = getObjectFromEntries('InstagramSecurityConfig', html)?.csrf_token;
+
+    const anonCookie = [
+      csrf && `csrftoken=${csrf}`,
+      polarisSiteData?.device_id && `ig_did=${polarisSiteData.device_id}`,
+      'wd=1280x720',
+      'dpr=2',
+      polarisSiteData?.machine_id && `mid=${polarisSiteData.machine_id}`,
+      'ig_nrcb=1',
+    ].filter(Boolean).join('; ');
+
+    return {
+      headers: {
+        'x-ig-app-id': webConfig?.appId ?? '936619743392459',
+        'X-FB-LSD': lsd,
+        'X-CSRFToken': csrf ?? '',
+        'X-Bloks-Version-Id': getObjectFromEntries('WebBloksVersioningID', html)?.versioningID ?? '',
+        'x-asbd-id': '129477',
+        cookie: anonCookie,
+      },
+      body: {
+        __d: 'www',
+        __a: '1',
+        __s: '::' + Math.random().toString(36).slice(2).replace(/\d/g, '').slice(0, 6),
+        __hs: siteData?.haste_session ?? '20126.HYP:instagram_web_pkg.2.1...0',
+        __req: 'b',
+        __ccg: 'EXCELLENT',
+        __rev: pushInfo?.rollout_hash ?? '1019933358',
+        __hsi: siteData?.hsi ?? '7436540909012459023',
+        __dyn: randomB64(154),
+        __csr: randomB64(154),
+        __user: '0',
+        __comet_req: getNumberFromQuery('__comet_req', html) ?? '7',
+        av: '0',
+        dpr: '2',
+        lsd,
+        jazoest: getNumberFromQuery('jazoest', html) ?? Math.floor(Math.random() * 10000),
+        __spin_r: siteData?.__spin_r ?? '1019933358',
+        __spin_b: siteData?.__spin_b ?? 'trunk',
+        __spin_t: siteData?.__spin_t ?? Math.floor(Date.now() / 1000),
+      },
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function requestGQL(ctx: ExtractorContext, shortcode: string): Promise<{ gql_data: any } | null> {
+  try {
+    const params = await getGQLParams(ctx, shortcode);
+    if (!params) return null;
+
+    const { headers, body } = params;
+
+    const resp = await ctx.fetch('POST', 'https://www.instagram.com/graphql/query', {
+      headers: {
+        ...embedHeaders,
+        ...headers,
+        'content-type': 'application/x-www-form-urlencoded',
+        'X-FB-Friendly-Name': 'PolarisPostActionLoadPostQueryQuery',
+      },
+      body: new URLSearchParams({
+        ...body,
+        fb_api_caller_class: 'RelayModern',
+        fb_api_req_friendly_name: 'PolarisPostActionLoadPostQueryQuery',
+        variables: JSON.stringify({
+          shortcode,
+          fetch_tagged_user_count: null,
+          hoisted_comment_id: null,
+          hoisted_reply_id: null,
+        }),
+        server_timestamps: 'true',
+        doc_id: '8845758582119845',
+      }).toString(),
+    });
+
+    const data = (resp.data as any)?.data ?? null;
+    return data ? { gql_data: data } : null;
+  } catch {
+    return null;
+  }
+}
+
+// ── Data extraction ───────────────────────────────────────────────────────────
+
+interface IgItem {
+  isVideo: boolean;
+  url: string;
+  thumbnail?: string;
+  width?: number;
+  height?: number;
+}
+
+// Mobile API format (new)
+function extractNewPost(data: any): IgItem[] {
+  const results: IgItem[] = [];
+
+  const carousel: any[] = data.carousel_media ?? [];
+  if (carousel.length) {
+    for (const e of carousel) {
+      if (!e?.image_versions2) continue;
+      const thumb: string = e.image_versions2.candidates?.[0]?.url ?? '';
+      if (e.video_versions?.length) {
+        const best = e.video_versions.reduce((a: any, b: any) =>
+          a.width * a.height < b.width * b.height ? b : a);
+        results.push({ isVideo: true, url: best.url, thumbnail: thumb, width: best.width, height: best.height });
+      } else {
+        const img = e.image_versions2.candidates[0];
+        results.push({ isVideo: false, url: img.url, width: img.width, height: img.height });
+      }
+    }
+    return results;
   }
 
-  if ('error' in response) {
-    throw new Error(`instagram error: ${response.error}`);
+  if (data.video_versions?.length) {
+    const best = data.video_versions.reduce((a: any, b: any) =>
+      a.width * a.height < b.width * b.height ? b : a);
+    const thumb = data.image_versions2?.candidates?.[0]?.url;
+    results.push({ isVideo: true, url: best.url, thumbnail: thumb, width: best.width, height: best.height });
+    return results;
   }
 
-  if (!response.media_details?.length) throw Errors.Unavailable;
+  if (data.image_versions2?.candidates?.length) {
+    const img = data.image_versions2.candidates[0];
+    results.push({ isVideo: false, url: img.url, width: img.width, height: img.height });
+    return results;
+  }
+
+  return results;
+}
+
+// GQL / embed format (old)
+function extractOldPost(data: any): IgItem[] {
+  const results: IgItem[] = [];
+  const sm = data?.gql_data?.shortcode_media ?? data?.gql_data?.xdt_shortcode_media ?? data?.media ?? data;
+  if (!sm) return results;
+
+  const sidecar = sm.edge_sidecar_to_children;
+  if (sidecar?.edges?.length) {
+    for (const e of sidecar.edges) {
+      const node = e.node;
+      if (!node?.display_url) continue;
+      if (node.is_video && node.video_url) {
+        results.push({
+          isVideo: true,
+          url: node.video_url,
+          thumbnail: node.display_url,
+          width: node.dimensions?.width,
+          height: node.dimensions?.height,
+        });
+      } else {
+        results.push({
+          isVideo: false,
+          url: node.display_url,
+          width: node.dimensions?.width,
+          height: node.dimensions?.height,
+        });
+      }
+    }
+    return results;
+  }
+
+  if (sm.video_url) {
+    results.push({
+      isVideo: true,
+      url: sm.video_url,
+      thumbnail: sm.display_url,
+      width: sm.dimensions?.width,
+      height: sm.dimensions?.height,
+    });
+    return results;
+  }
+
+  if (sm.display_url) {
+    results.push({
+      isVideo: false,
+      url: sm.display_url,
+      width: sm.dimensions?.width,
+      height: sm.dimensions?.height,
+    });
+    return results;
+  }
+
+  return results;
+}
+
+// ── Main post fetcher ─────────────────────────────────────────────────────────
+
+async function getPost(ctx: ExtractorContext): Promise<Media> {
+  const shortcode = ctx.contentId;
+  let items: IgItem[] = [];
+
+  // 1. Mobile API (unauthenticated)
+  const mediaId = await getMediaId(ctx, shortcode);
+  if (mediaId) {
+    const mobileData = await requestMobileApi(ctx, mediaId);
+    if (mobileData) {
+      items = extractNewPost(mobileData);
+      logger.debug({ shortcode }, 'instagram: resolved via mobile API');
+    }
+  }
+
+  // 2. HTML embed page
+  if (!items.length) {
+    const embedData = await requestHTML(ctx, shortcode);
+    if (embedData) {
+      items = extractOldPost({ gql_data: embedData });
+      logger.debug({ shortcode }, 'instagram: resolved via embed page');
+    }
+  }
+
+  // 3. GQL with anon session tokens from page HTML
+  if (!items.length) {
+    const gqlData = await requestGQL(ctx, shortcode);
+    if (gqlData) {
+      items = extractOldPost(gqlData);
+      logger.debug({ shortcode }, 'instagram: resolved via GQL');
+    }
+  }
+
+  if (!items.length) {
+    logger.warn({ shortcode }, 'instagram: all methods failed');
+    throw Errors.Unavailable;
+  }
 
   const media = ctx.newMedia();
-  media.setCaption(response.post_info?.caption ?? '');
 
-  for (const detail of response.media_details) {
-    const item = media.newItem();
+  for (const item of items) {
+    const mi = media.newItem();
     const mf = new MediaFormat();
-    mf.url = [detail.url];
-    mf.width = detail.dimensions?.width ?? 0;
-    mf.height = detail.dimensions?.height ?? 0;
+    mf.url = [item.url];
+    mf.width = item.width ?? 0;
+    mf.height = item.height ?? 0;
 
-    if (detail.type === 'video') {
+    if (item.isVideo) {
       mf.type = MediaType.Video;
       mf.formatId = 'video';
       mf.videoCodec = MediaCodec.Avc;
       mf.audioCodec = MediaCodec.Aac;
-      if (detail.thumbnail) mf.thumbnailUrl = [detail.thumbnail];
+      if (item.thumbnail) mf.thumbnailUrl = [item.thumbnail];
     } else {
       mf.type = MediaType.Photo;
       mf.formatId = 'photo';
     }
-    item.addFormats(mf);
+
+    mi.addFormats(mf);
   }
 
   return media;
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function randomB64(bytes: number): string {
+  const arr = new Uint8Array(bytes);
+  crypto.getRandomValues(arr);
+  return btoa(String.fromCharCode(...arr)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
 }
