@@ -1,8 +1,11 @@
 import { Extractor, MediaFormat, DownloadSettings, ExtractorContext, Media } from '../../models/index.js';
 import { MediaType, MediaCodec } from '../../database/index.js';
 import { Errors } from '../../util/index.js';
-import type { Cookie } from '../../networking/index.js';
 import logger from '../../logger/index.js';
+
+// Same UA as cobalt — stripped for redirect, full for page fetch
+const UA_FULL = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+const UA_SHORT = UA_FULL.split(' Chrome/1')[0];
 
 export const TikTokVMExtractor = new Extractor({
   id: 'tiktok',
@@ -11,17 +14,32 @@ export const TikTokVMExtractor = new Extractor({
   host: ['tiktok', 'vxtiktok'],
   redirect: true,
   async getFunc(ctx: ExtractorContext): Promise<{ media?: Media; url?: string }> {
-    const redirectUrl = await ctx.fetchLocation(ctx.contentUrl);
+    // cobalt approach: redirect:"manual", parse <a href="..."> from body
+    const res = await fetch(ctx.contentUrl, {
+      redirect: 'manual',
+      headers: { 'user-agent': UA_SHORT },
+    });
 
-    let url: string;
+    let url: string | null = null;
+
+    const body = await res.text().catch(() => '');
+    if (body.startsWith('<a href="https://')) {
+      url = body.split('<a href="')[1]?.split('"')[0] ?? null;
+    }
+
+    // fallback: Location header
+    if (!url) url = res.headers.get('location');
+    // fallback: native fetch response.url (after any redirect)
+    if (!url) url = res.url !== ctx.contentUrl ? res.url : null;
+
+    if (!url) throw new Error('could not resolve short tiktok url');
+
     try {
-      const parsed = new URL(redirectUrl);
+      const parsed = new URL(url);
       if (parsed.pathname === '/login') {
         const realURL = parsed.searchParams.get('redirect_url');
         if (!realURL) throw Errors.GeoRestricted;
         url = realURL;
-      } else {
-        url = redirectUrl;
       }
     } catch (e) {
       if ((e as { id?: string }).id) throw e;
@@ -44,53 +62,64 @@ export const TikTokExtractor = new Extractor({
 });
 
 async function getMedia(ctx: ExtractorContext): Promise<Media> {
-  let details: TikTokItemStruct | undefined;
-  let cookies: Cookie[] | undefined;
+  let detail: TikTokItemStruct | undefined;
+  let cookieHeader = '';
   let lastErr: Error | undefined;
 
-  for (let i = 0; i < 5; i++) {
+  for (let attempt = 0; attempt < 5; attempt++) {
     try {
-      [details, cookies] = await getVideoWeb(ctx);
+      [detail, cookieHeader] = await fetchVideoDetail(ctx.contentId, cookieHeader);
       lastErr = undefined;
       break;
     } catch (e) {
       lastErr = e as Error;
-      logger.warn({ attempt: i + 1, err: lastErr.message }, 'tiktok: getVideoWeb failed');
+      logger.warn({ attempt: attempt + 1, err: lastErr.message }, 'tiktok: fetch attempt failed');
     }
   }
-  if (!details) throw new Error(`failed to get video data: ${lastErr?.message}`);
+
+  if (!detail) throw new Error(`tiktok: all attempts failed — ${lastErr?.message}`);
 
   const media = ctx.newMedia();
-  media.setCaption(details.desc ?? '');
+  media.setCaption(detail.desc ?? '');
 
-  const isImageSlide = !!details.imagePost;
+  const isImageSlide = !!detail.imagePost;
 
   if (!isImageSlide) {
-    const item = media.newItem();
-    const video = details.video;
-    if (!video?.playAddr?.urlList?.length) throw Errors.Unavailable;
+    const video = detail.video;
+    if (!video?.playAddr) throw Errors.Unavailable;
 
+    // cobalt: prefer H.265 if available
+    const h265 = detail.video?.bitrateInfo?.find(b => b.CodecType?.includes('h265'))?.PlayAddr?.UrlList?.[0];
+    const urls = h265 ? [h265] : (video.playAddr.urlList ?? []);
+    if (!urls.length) throw Errors.Unavailable;
+
+    const item = media.newItem();
     const mf = new MediaFormat();
     mf.type = MediaType.Video;
     mf.formatId = video.playAddr.uri || 'video';
-    mf.url = video.playAddr.urlList;
-    mf.videoCodec = MediaCodec.Avc;
+    mf.url = urls;
+    mf.videoCodec = h265 ? MediaCodec.Hevc : MediaCodec.Avc;
     mf.audioCodec = MediaCodec.Aac;
     mf.width = video.playAddr.width ?? 0;
     mf.height = video.playAddr.height ?? 0;
     mf.duration = video.duration ?? 0;
     mf.downloadSettings = new DownloadSettings({
-      cookies,
-      headers: { Referer: 'https://www.tiktok.com/' },
+      headers: {
+        Referer: 'https://www.tiktok.com/',
+        ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+      },
     });
     item.addFormats(mf);
   } else {
-    for (const image of (details.imagePost?.images ?? [])) {
+    // cobalt: image URL is under imageURL.urlList (not url.urlList)
+    for (const image of (detail.imagePost?.images ?? [])) {
+      const urlList = image.imageURL?.urlList ?? [];
+      if (!urlList.length) continue;
       const item = media.newItem();
       const mf = new MediaFormat();
       mf.type = MediaType.Photo;
       mf.formatId = 'image';
-      mf.url = image.url?.urlList ?? [];
+      mf.url = urlList;
       item.addFormats(mf);
     }
   }
@@ -98,58 +127,79 @@ async function getMedia(ctx: ExtractorContext): Promise<Media> {
   return media;
 }
 
-async function getVideoWeb(ctx: ExtractorContext): Promise<[TikTokItemStruct, Cookie[]]> {
-  const url = `https://www.tiktok.com/@placeholder/video/${ctx.contentId}`;
-
-  const resp = await ctx.fetch('GET', url, {
+async function fetchVideoDetail(videoId: string, existingCookies: string): Promise<[TikTokItemStruct, string]> {
+  // cobalt uses @i/video/ — more reliable than @placeholder/video/
+  const res = await fetch(`https://www.tiktok.com/@i/video/${videoId}`, {
     headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-      'Accept-Language': 'en-US,en;q=0.9',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      'Referer': 'https://www.tiktok.com/',
-      'Sec-Fetch-Dest': 'document',
-      'Sec-Fetch-Mode': 'navigate',
-      'Sec-Fetch-Site': 'same-origin',
+      'user-agent': UA_FULL,
+      'accept-language': 'en-US,en;q=0.9',
+      'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'referer': 'https://www.tiktok.com/',
+      ...(existingCookies ? { cookie: existingCookies } : {}),
     },
-    responseType: 'text',
   });
 
-  const html = resp.data as string;
+  // Accumulate cookies for download auth
+  const updatedCookies = mergeCookies(existingCookies, getSetCookies(res.headers));
 
-  const match = html.match(/<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>([\s\S]*?)<\/script>/);
-  if (!match) {
-    logger.warn({ status: resp.status, htmlSnippet: html.slice(0, 300) }, 'tiktok: universal data not found');
-    throw new Error('universal data script not found in page');
-  }
+  const html = await res.text();
 
-  let parsed: unknown;
+  let detail: TikTokItemStruct;
   try {
-    parsed = JSON.parse(match[1]);
-  } catch {
-    throw new Error('failed to parse tiktok JSON data');
+    // cobalt uses split() — avoids regex backtracking on large HTML
+    const json = html
+      .split('<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application/json">')[1]
+      ?.split('</script>')[0];
+
+    if (!json) {
+      logger.warn({ status: res.status, snippet: html.slice(0, 400) }, 'tiktok: universal data script not found');
+      throw new Error('universal data script not found');
+    }
+
+    const data = JSON.parse(json) as Record<string, unknown>;
+    const scope = data['__DEFAULT_SCOPE__'] as Record<string, unknown>;
+    const videoDetail = scope?.['webapp.video-detail'] as TikTokVideoDetail | undefined;
+
+    if (!videoDetail) throw new Error('webapp.video-detail not found');
+    if (videoDetail.statusMsg) throw Errors.Unavailable; // deleted / restricted
+
+    const itemStruct = videoDetail.itemInfo?.itemStruct;
+    if (!itemStruct) throw new Error('itemStruct not found');
+    if (videoDetail.itemInfo?.statusMsg) throw Errors.Unavailable;
+
+    detail = itemStruct;
+  } catch (e) {
+    if ((e as { id?: string }).id) throw e;
+    throw new Error(`parse error: ${(e as Error).message}`);
   }
 
-  const p = parsed as Record<string, unknown>;
-  const scope = p?.['__DEFAULT_SCOPE__'] as Record<string, unknown> | undefined;
-  const detail = (scope?.['webapp.video-detail'] as TikTokVideoDetail | undefined)?.itemInfo?.itemStruct
-    ?? (p?.itemInfo as { itemStruct?: TikTokItemStruct } | undefined)?.itemStruct;
-
-  if (!detail) throw new Error('itemStruct not found in universal data');
-
-  const setCookie = resp.headers?.['set-cookie'];
-  const cookies = setCookie ? parseCookies(setCookie as string | string[]) : [];
-
-  return [detail, cookies];
+  return [detail, updatedCookies];
 }
 
-function parseCookies(header: string | string[]): Cookie[] {
-  const list = Array.isArray(header) ? header : [header];
-  return list.map(h => {
-    const [pair] = h.split(';');
-    const [name, ...rest] = pair.split('=');
-    return { name: name.trim(), value: rest.join('=').trim() };
-  });
+function getSetCookies(headers: Headers): string[] {
+  // getSetCookie() is a modern Web API available in CF Workers
+  if (typeof (headers as unknown as { getSetCookie?: () => string[] }).getSetCookie === 'function') {
+    return (headers as unknown as { getSetCookie(): string[] }).getSetCookie();
+  }
+  const raw = headers.get('set-cookie');
+  return raw ? [raw] : [];
 }
+
+function mergeCookies(existing: string, setCookies: string[]): string {
+  const map: Record<string, string> = {};
+  for (const pair of existing.split(';').map(s => s.trim()).filter(Boolean)) {
+    const [k, ...v] = pair.split('=');
+    map[k.trim()] = v.join('=').trim();
+  }
+  for (const header of setCookies) {
+    const [pair] = header.split(';');
+    const [k, ...v] = pair.split('=');
+    map[k.trim()] = v.join('=').trim();
+  }
+  return Object.entries(map).map(([k, v]) => `${k}=${v}`).join('; ');
+}
+
+// ── Types ─────────────────────────────────────────────────────────────────────
 
 interface TikTokPlayAddr {
   uri: string;
@@ -158,21 +208,33 @@ interface TikTokPlayAddr {
   height?: number;
 }
 
-interface TikTokVideo {
-  playAddr: TikTokPlayAddr;
-  duration?: number;
+interface TikTokBitrateInfo {
+  CodecType?: string;
+  PlayAddr?: { UrlList?: string[] };
 }
 
-interface TikTokImageUrl { urlList: string[]; }
-interface TikTokImage { url?: TikTokImageUrl; }
+interface TikTokVideo {
+  playAddr?: TikTokPlayAddr;
+  duration?: number;
+  bitrateInfo?: TikTokBitrateInfo[];
+}
+
+interface TikTokImageURL { urlList: string[]; }
+interface TikTokImage { imageURL?: TikTokImageURL; }
 interface TikTokImagePost { images?: TikTokImage[]; }
 
 interface TikTokItemStruct {
   desc?: string;
   video?: TikTokVideo;
   imagePost?: TikTokImagePost;
+  isContentClassified?: boolean;
+  author?: { uniqueId?: string };
 }
 
 interface TikTokVideoDetail {
-  itemInfo?: { itemStruct?: TikTokItemStruct };
+  statusMsg?: string;
+  itemInfo?: {
+    itemStruct?: TikTokItemStruct;
+    statusMsg?: string;
+  };
 }
