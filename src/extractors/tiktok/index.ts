@@ -88,9 +88,8 @@ async function getMedia(ctx: ExtractorContext): Promise<Media> {
     const video = detail.video;
     if (!video?.playAddr) throw Errors.Unavailable;
 
-    // cobalt: prefer H.265 if available
-    const h265 = detail.video?.bitrateInfo?.find(b => b.CodecType?.includes('h265'))?.PlayAddr?.UrlList?.[0];
-    const urls = h265 ? [h265] : (video.playAddr.urlList ?? []);
+    // Use H.264 from playAddr — Telegram renders it as Video (HEVC would be sent as Document)
+    const urls = video.playAddr.urlList ?? [];
     if (!urls.length) throw Errors.Unavailable;
 
     const item = media.newItem();
@@ -98,7 +97,7 @@ async function getMedia(ctx: ExtractorContext): Promise<Media> {
     mf.type = MediaType.Video;
     mf.formatId = video.playAddr.uri || 'video';
     mf.url = urls;
-    mf.videoCodec = h265 ? MediaCodec.Hevc : MediaCodec.Avc;
+    mf.videoCodec = MediaCodec.Avc;
     mf.audioCodec = MediaCodec.Aac;
     mf.width = video.playAddr.width ?? 0;
     mf.height = video.playAddr.height ?? 0;
