@@ -65,6 +65,8 @@ interface EnvConfig {
 
   AutomaticLanguageDetection: boolean;
 
+  TwitterBearerToken: string;
+
   DownloadsDir: string;
 }
 
@@ -104,6 +106,8 @@ export const Env: EnvConfig = {
   DefaultDeleteLinks: parseBoolEnv('DEFAULT_DELETE_LINKS', false),
 
   AutomaticLanguageDetection: parseBoolEnv('AUTOMATIC_LANGUAGE_DETECTION', true),
+
+  TwitterBearerToken: process.env.TWITTER_BEARER_TOKEN || '',
 
   DownloadsDir: path.resolve(process.env.DOWNLOADS_DIR || 'downloads'),
 };

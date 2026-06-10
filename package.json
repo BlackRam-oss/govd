@@ -20,15 +20,19 @@
     "grammy": "^1.30.0",
     "https-proxy-agent": "^7.0.5",
     "i18next": "^26.3.1",
+    "instagram-url-direct": "^2.0.7",
     "lru-cache": "^11.0.0",
     "node-id3": "^0.2.6",
     "pino": "^9.0.0",
     "pino-pretty": "^11.0.0",
     "socks-proxy-agent": "^8.0.4",
+    "tiktok-scraper": "^1.4.36",
     "tldts": "^6.1.0",
     "tough-cookie": "^4.1.4",
+    "twitter-api-v2": "^1.29.0",
     "uuid": "^10.0.0",
-    "youtube-dl-exec": "^3.1.7"
+    "youtube-dl-exec": "^3.1.7",
+    "youtubei.js": "^17.0.1"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260610.1",
