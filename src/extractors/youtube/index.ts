@@ -1,4 +1,4 @@
-import { Innertube } from 'youtubei.js';
+import { Innertube } from 'youtubei.js/cf-worker';
 import { Extractor, MediaFormat, Media, ExtractorContext } from '../../models/index.js';
 import { MediaType } from '../../database/index.js';
 import { parseVideoCodec, parseAudioCodec } from '../../util/index.js';

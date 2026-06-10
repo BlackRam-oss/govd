@@ -26,7 +26,6 @@
     "pino": "^9.0.0",
     "pino-pretty": "^11.0.0",
     "socks-proxy-agent": "^8.0.4",
-    "tiktok-scraper": "^1.4.36",
     "tldts": "^6.1.0",
     "tough-cookie": "^4.1.4",
     "twitter-api-v2": "^1.29.0",
