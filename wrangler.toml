@@ -5,7 +5,7 @@ compatibility_flags = [ "nodejs_compat" ]
 
 [[kv_namespaces]]
 binding = "BOT_KV"
-id = "56a6c8a1b11a4c0a8b0b4a2e9d1f9e3d"
+id = "fa61343228ef41f094d3c00e5023db6f"
 
 [[d1_databases]]
 binding = "DB"
