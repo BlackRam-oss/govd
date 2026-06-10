@@ -296,6 +296,7 @@ interface DownloadedFormatParams {
   index: number;
   filePath?: string;
   thumbnailFilePath?: string;
+  buffer?: Uint8Array | null;
   error?: Error | null;
 }
 
@@ -304,13 +305,15 @@ export class DownloadedFormat {
   index: number;
   filePath: string;
   thumbnailFilePath: string;
+  buffer: Uint8Array | null;
   error: Error | null;
 
-  constructor({ format, index, filePath = '', thumbnailFilePath = '', error = null }: DownloadedFormatParams) {
+  constructor({ format, index, filePath = '', thumbnailFilePath = '', buffer = null, error = null }: DownloadedFormatParams) {
     this.format = format ?? new MediaFormat();
     this.index = index;
     this.filePath = filePath;
     this.thumbnailFilePath = thumbnailFilePath;
+    this.buffer = buffer;
     this.error = error;
   }
 }

@@ -121,19 +121,25 @@ async function buildInputMedia(
   caption: string | undefined,
   isSpoiler: boolean,
 ): Promise<object> {
-  const { format, filePath, thumbnailFilePath } = downloadedFormat;
-  const [, fileType] = format.getInfo();
+  const { format, filePath, thumbnailFilePath, buffer } = downloadedFormat;
+  const [ext, fileType] = format.getInfo();
 
   let mediaFile: string | InputFile;
   if (format.fileId) {
     mediaFile = format.fileId;
+  } else if (buffer) {
+    mediaFile = new InputFile(buffer, `media.${ext}`);
   } else {
     mediaFile = new InputFile(fs.createReadStream(filePath), path.basename(filePath));
   }
 
   let thumbnail: InputFile | undefined;
-  if (thumbnailFilePath && fs.existsSync(thumbnailFilePath)) {
-    thumbnail = new InputFile(fs.createReadStream(thumbnailFilePath), path.basename(thumbnailFilePath));
+  if (!buffer && thumbnailFilePath) {
+    try {
+      if (fs.existsSync(thumbnailFilePath)) {
+        thumbnail = new InputFile(fs.createReadStream(thumbnailFilePath), path.basename(thumbnailFilePath));
+      }
+    } catch (_) {}
   }
 
   const base = {

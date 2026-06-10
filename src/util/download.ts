@@ -5,6 +5,26 @@ import { Env } from '../config/index.js';
 import logger from '../logger/index.js';
 import type { ExtractorContext, DownloadSettings } from '../models/index.js';
 
+export async function downloadBufferWithFetch(
+  urls: string[],
+  headers: Record<string, string> = {},
+): Promise<Uint8Array> {
+  let lastError: Error | undefined;
+  for (const url of urls) {
+    try {
+      const res = await fetch(url, { headers });
+      if (!res.ok) {
+        lastError = new Error(`HTTP ${res.status}`);
+        continue;
+      }
+      return new Uint8Array(await res.arrayBuffer());
+    } catch (e) {
+      lastError = e as Error;
+    }
+  }
+  throw lastError || new Error('download failed');
+}
+
 export function toPath(fileName: string): string {
   return path.join(Env.DownloadsDir, fileName);
 }

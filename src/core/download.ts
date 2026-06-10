@@ -1,11 +1,7 @@
-import path from 'path';
 import { DownloadedFormat, ExtractorContext, MediaItem, MediaFormat } from '../models/index.js';
 import { MediaType } from '../database/index.js';
 import { exceedsMaxFileSize, exceedsMaxDuration, Errors } from '../util/index.js';
-import { downloadFile, downloadFileInMemory, downloadFileWithSegments } from '../util/download.js';
-import { bufferToJpeg } from '../util/image.js';
-import { getVideoInfo, getThumbnail } from '../util/ffmpeg.js';
-import { toPath } from '../util/download.js';
+import { downloadBufferWithFetch } from '../util/download.js';
 import logger from '../logger/index.js';
 
 const CONCURRENCY = 3;
@@ -76,38 +72,11 @@ async function downloadItem(ctx: ExtractorContext, item: MediaItem, index: numbe
 export async function downloadFormat(ctx: ExtractorContext, index: number, format: MediaFormat): Promise<DownloadedFormat> {
   if (!format.url?.length) throw new Error('no URL for selected format');
 
-  const fileName = format.getFileName();
+  const headers = format.downloadSettings?.headers || {};
+  const buffer = await downloadBufferWithFetch(format.url, headers);
 
-  if (format.type === MediaType.Photo) {
-    const buffer = await downloadFileInMemory(ctx, format.url, format.downloadSettings);
-    const filePath = toPath(fileName);
-    ctx.filesTracker.add(filePath);
-
-    const bounds = await bufferToJpeg(buffer, filePath);
-    format.width = bounds.w;
-    format.height = bounds.h;
-
-    return new DownloadedFormat({ format, index, filePath });
-  }
-
-  let filePath: string;
-  if (format.segments?.length) {
-    if (format.downloadSettings) format.downloadSettings.decryptionKey = format.decryptionKey;
-    filePath = await downloadFileWithSegments(ctx, format.initSegment, format.segments, fileName, format.downloadSettings);
-  } else {
-    filePath = await downloadFile(ctx, format.url, fileName, format.downloadSettings);
-  }
-
-  const thumbnailFilePath = await getThumbnail(ctx, format, filePath);
-
-  if (format.missingMetadata()) {
-    const info = await getVideoInfo(filePath);
-    format.width = info.width;
-    format.height = info.height;
-    format.duration = info.duration;
-  }
-
-  return new DownloadedFormat({ format, index, filePath, thumbnailFilePath });
+  logger.debug({ bytes: buffer.byteLength, formatId: format.formatId }, 'downloaded format in-memory');
+  return new DownloadedFormat({ format, index, buffer });
 }
 
 async function mergeFormats(ctx: ExtractorContext, item: MediaItem, downloaded: DownloadedFormat): Promise<void> {
