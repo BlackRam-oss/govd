@@ -62,7 +62,9 @@ export async function sendFormats(
       };
     }
 
+    logger.info({ chatId, itemCount: chunk.length, types: chunk.map(df => df.format.type) }, 'sending media group');
     const msgs = await bot.api.sendMediaGroup(chatId!, mediaGroup as any, sendOpts as any);
+    logger.info({ chatId, sentCount: msgs.length }, 'media group sent');
     sentMessages.push(...msgs);
 
     if (options.delete) {

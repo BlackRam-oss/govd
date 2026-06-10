@@ -350,17 +350,25 @@ async function getPost(ctx: ExtractorContext): Promise<Media> {
   try {
     // get media_id — oembed first, then local decode as fallback
     const mediaId = await getMediaId(shortcode);
+    logger.info({ shortcode, mediaId }, 'instagram: mediaId resolved');
 
     // mobile api (no cookie)
-    if (mediaId && !hasData(data)) data = await requestMobileApi(mediaId);
+    if (mediaId && !hasData(data)) {
+      data = await requestMobileApi(mediaId);
+      logger.info({ shortcode, mobileApiResult: data != null ? 'ok' : 'null' }, 'instagram: mobile API');
+    }
 
     // html embed (no cookie)
-    if (!hasData(data)) data = await requestHTML(shortcode);
+    if (!hasData(data)) {
+      data = await requestHTML(shortcode);
+      logger.info({ shortcode, htmlResult: data != null ? 'ok' : 'null' }, 'instagram: html embed');
+    }
 
     // graphql (anon session tokens from page)
     if (!hasData(data)) {
       const gql = await requestGQL(shortcode);
       if (gql) data = gql;
+      logger.info({ shortcode, gqlResult: gql != null ? 'ok' : 'null' }, 'instagram: GQL');
     }
   } catch (e) {
     logger.warn({ shortcode, err: (e as Error).message }, 'instagram: unexpected error during fetch');
@@ -370,10 +378,12 @@ async function getPost(ctx: ExtractorContext): Promise<Media> {
   let items: IgItem[] = [];
   if (data?.gql_data != null) {
     items = extractOldPost(data);
-    logger.debug({ shortcode }, 'instagram: resolved via GQL/embed');
+    logger.info({ shortcode, itemCount: items.length }, 'instagram: resolved via GQL/embed');
   } else if (data != null) {
     items = extractNewPost(data);
-    logger.debug({ shortcode }, 'instagram: resolved via mobile API');
+    logger.info({ shortcode, itemCount: items.length }, 'instagram: resolved via mobile API');
+  } else {
+    logger.info({ shortcode }, 'instagram: all methods returned null');
   }
 
   if (!items.length) {

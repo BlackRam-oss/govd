@@ -52,13 +52,30 @@ async function executeDownload(extractorCtx: ExtractorContext, isInline: boolean
   }
 
   const resp = await extractorCtx.extractor.getFunc(extractorCtx);
-  if (!resp?.media || !resp.media.items.length) throw ErrNoMedia;
+  if (!resp?.media || !resp.media.items.length) {
+    logger.info({ extractor: extractorCtx.extractor.id, contentId: extractorCtx.contentId }, 'no media items found');
+    throw ErrNoMedia;
+  }
+
+  logger.info({
+    extractor: extractorCtx.extractor.id,
+    contentId: extractorCtx.contentId,
+    itemCount: resp.media.items.length,
+    types: resp.media.items.map(i => i.formats[0]?.type),
+  }, 'extractor returned items');
 
   if (isInline && resp.media.items.length > 1) throw Errors.InlineMediaAlbum;
 
   checkAlbumLimit(resp.media.items.length, extractorCtx.chat);
 
   const formats = await downloadMediaFormats(extractorCtx, resp.media);
+
+  logger.info({
+    extractor: extractorCtx.extractor.id,
+    itemCount: formats.length,
+    hasErrors: formats.some(f => f.error),
+    errors: formats.filter(f => f.error).map(f => f.error?.message),
+  }, 'download complete');
 
   return new TaskResult({ media: resp.media, formats });
 }

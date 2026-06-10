@@ -114,6 +114,12 @@ async function getMedia(ctx: ExtractorContext): Promise<Media> {
   };
 
   const isImageSlide = !!detail.imagePost;
+  logger.info({
+    postId: ctx.contentId,
+    isImageSlide,
+    imageCount: detail.imagePost?.images?.length ?? 0,
+    hasVideo: !!detail.video?.playAddr,
+  }, 'tiktok: media type detected');
 
   if (!isImageSlide) {
     const video = detail.video;

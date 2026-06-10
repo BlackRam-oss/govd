@@ -73,9 +73,11 @@ export async function downloadFormat(ctx: ExtractorContext, index: number, forma
   if (!format.url?.length) throw new Error('no URL for selected format');
 
   const headers = format.downloadSettings?.headers || {};
+  logger.info({ index, formatId: format.formatId, type: format.type, url: format.url[0]?.slice(0, 80) }, 'downloading format');
+
   const buffer = await downloadBufferWithFetch(format.url, headers);
 
-  logger.debug({ bytes: buffer.byteLength, formatId: format.formatId }, 'downloaded format in-memory');
+  logger.info({ index, bytes: buffer.byteLength, formatId: format.formatId, type: format.type }, 'downloaded format');
   return new DownloadedFormat({ format, index, buffer });
 }
 
