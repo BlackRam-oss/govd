@@ -1,7 +1,0 @@
-youtube:
-  instance: https://instance.com
-  disabled: true
-
-instagram:
-  proxy: http://localhost:8080
-  download_proxy: http://localhost:8081

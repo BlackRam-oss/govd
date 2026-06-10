@@ -1,23 +1,5 @@
-# binaries
-*.exe
-govd
-
-# build artifacts
+node_modules/
 .env
-tmp/
-
-# ides and editors
-.idea/
-
-# system files
-.DS_Store
-
-# project folders
 downloads/
 logs/
-
-# i18n translations
-translate.*.toml
-
-# Agents
-CLAUDE.md
+*.log
