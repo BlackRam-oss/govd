@@ -11,6 +11,7 @@
     "start:prod": "node dist/index.js"
   },
   "dependencies": {
+    "@cf-wasm/photon": "^0.3.6",
     "axios": "^1.7.0",
     "axios-cookiejar-support": "^4.0.7",
     "cheerio": "^1.0.0",
@@ -22,7 +23,6 @@
     "node-id3": "^0.2.6",
     "pino": "^9.0.0",
     "pino-pretty": "^11.0.0",
-    "sharp": "^0.33.5",
     "socks-proxy-agent": "^8.0.4",
     "tldts": "^6.1.0",
     "tough-cookie": "^4.1.4",
