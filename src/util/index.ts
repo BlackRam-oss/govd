@@ -1,14 +1,10 @@
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import { execSync, exec } from 'child_process';
-import { promisify } from 'util';
 import { parse as tldtsParse } from 'tldts';
 import { Env } from '../config/index.js';
 import { MediaCodec } from '../database/index.js';
 import logger from '../logger/index.js';
-
-const execAsync = promisify(exec);
 
 // ── URL utils ─────────────────────────────────────────────────────────────────
 
@@ -89,17 +85,6 @@ export function parseHex(str: string): Buffer {
   const buf = Buffer.from(clean, 'hex');
   if (buf.length !== 16) throw new Error(`IV must be 16 bytes, got ${buf.length}`);
   return buf;
-}
-
-// ── FFmpeg ────────────────────────────────────────────────────────────────────
-
-export function checkFFmpeg(): boolean {
-  try {
-    execSync('ffmpeg -version', { stdio: 'ignore' });
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 // ── cleanup ───────────────────────────────────────────────────────────────────

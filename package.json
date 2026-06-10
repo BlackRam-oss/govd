@@ -29,6 +29,7 @@
     "uuid": "^10.0.0"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260610.1",
     "@types/fluent-ffmpeg": "^2.1.28",
     "@types/node": "^25.9.2",
     "@types/tough-cookie": "^4.0.5",

@@ -1,6 +1,7 @@
 name = "govd"
 main = "src/index.ts"          # <-- cambia se il tuo entry point è diverso (es. dist/index.js)
 compatibility_date = "2026-06-10"
+compatibility_flags = [ "nodejs_compat" ]
 
 [[kv_namespaces]]
 binding = "BOT_KV"
