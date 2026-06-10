@@ -40,6 +40,13 @@ async function downloadItem(ctx: ExtractorContext, item: MediaItem, index: numbe
     return new DownloadedFormat({ index, error: new Error(`no default format for item ${index}`) });
   }
 
+  // For photos with a public URL and no cached fileId, skip downloading.
+  // Telegram fetches the URL directly, avoiding buffer memory and download time in the Worker.
+  if (format.type === MediaType.Photo && format.url?.length && !format.fileId) {
+    logger.info({ index, formatId: format.formatId, url: format.url[0]?.slice(0, 80) }, 'photo: using direct url, skipping download');
+    return new DownloadedFormat({ format, index });
+  }
+
   logger.debug(`selected format: ${format.toString()}`);
 
   const validationErr = validateFormat(format);

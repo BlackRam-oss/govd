@@ -30,7 +30,7 @@ initDB();
 const bot = createBot();
 registerHandlers(bot);
 
-const handleUpdate = webhookCallback(bot, 'cloudflare-mod');
+const handleUpdate = webhookCallback(bot, 'cloudflare-mod', { onTimeout: 'return', timeoutMilliseconds: 25000 });
 
 export default {
   async fetch(request: Request, _env: WorkerEnv, _ctx: ExecutionContext): Promise<Response> {

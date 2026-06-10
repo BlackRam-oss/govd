@@ -135,6 +135,9 @@ async function buildInputMedia(
     mediaFile = format.fileId;
   } else if (buffer) {
     mediaFile = new InputFile(buffer, `media.${ext}`);
+  } else if (format.url?.[0]) {
+    // No buffer — photo download was skipped; pass URL directly so Telegram fetches it.
+    mediaFile = format.url[0];
   } else {
     mediaFile = new InputFile(fs.createReadStream(filePath), path.basename(filePath));
   }
