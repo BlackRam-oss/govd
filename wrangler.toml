@@ -3,6 +3,12 @@ main = "src/index.ts"          # <-- cambia se il tuo entry point è diverso (es
 compatibility_date = "2026-06-10"
 compatibility_flags = [ "nodejs_compat" ]
 
+[observability.logs]
+enabled = true
+invocation_logs = true
+
+[observability.traces]
+
 [[kv_namespaces]]
 binding = "BOT_KV"
 id = "fa61343228ef41f094d3c00e5023db6f"
