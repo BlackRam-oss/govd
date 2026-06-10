@@ -7,11 +7,6 @@ compatibility_flags = [ "nodejs_compat" ]
 binding = "BOT_KV"
 id = "fa61343228ef41f094d3c00e5023db6f"
 
-[[d1_databases]]
-binding = "DB"
-database_name = "govd-db"      # <-- verifica il nome esatto nel database D1
-database_id = "2c5d4e8a-9b1c-4f2d-a3e5-6b7c8d9e0f1a"
-
 [vars]
 BOT_USERNAME = "govd_bot"
 OWNER_ID = "123456789"
