@@ -133,16 +133,15 @@ function checkAlbumLimit(n: number, chat: ChatRow | null): void {
 }
 
 export function formatCaption(media: Media, username: string, captionsEnabled: boolean): string {
-  if (!captionsEnabled || !media.caption) return '';
+  if (!captionsEnabled) return '';
 
-  let header = Env.CaptionsHeader
+  const header = Env.CaptionsHeader
     .replace('{{url}}', media.contentUrl)
     .replace('{{username}}', username);
 
-  let desc = '';
-  if (media.caption) {
-    desc = Env.CaptionsDescription.replace('{{text}}', media.caption);
-  }
+  const desc = media.caption
+    ? Env.CaptionsDescription.replace('{{text}}', media.caption)
+    : '';
 
   return [header, desc].filter(Boolean).join('\n');
 }
