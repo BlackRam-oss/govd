@@ -50,7 +50,7 @@ export async function sendFormats(
     for (let i = 0; i < chunk.length; i++) {
       const df = chunk[i];
       const caption = i === 0 ? options.caption : undefined;
-      const inputMedia = await buildInputMedia(df, caption, options.isSpoiler);
+      const inputMedia = await buildInputMedia(df, caption, options.isSpoiler, extractorCtx.extractor.id);
       mediaGroup.push(inputMedia);
     }
 
@@ -114,7 +114,7 @@ export async function sendInlineFormats(
   const fileId = getMessageFileId(msg);
   format.format.fileId = fileId;
 
-  const inputMedia = await buildInputMedia(format, options.caption, options.isSpoiler);
+  const inputMedia = await buildInputMedia(format, options.caption, options.isSpoiler, extractorCtx.extractor.id);
 
   const inlineId = ctx.chosenInlineResult?.inline_message_id;
   if (inlineId) {
@@ -122,10 +122,19 @@ export async function sendInlineFormats(
   }
 }
 
+function buildMediaFilename(extractorId: string, ext: string): string {
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const date = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  const time = `${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
+  return `${extractorId}-${date}_${time}.${ext}`;
+}
+
 async function buildInputMedia(
   downloadedFormat: DownloadedFormat,
   caption: string | undefined,
   isSpoiler: boolean,
+  extractorId: string = 'media',
 ): Promise<object> {
   const { format, filePath, thumbnailFilePath, buffer } = downloadedFormat;
   const [ext, fileType] = format.getInfo();
@@ -134,7 +143,7 @@ async function buildInputMedia(
   if (format.fileId) {
     mediaFile = format.fileId;
   } else if (buffer) {
-    mediaFile = new InputFile(buffer, `media.${ext}`);
+    mediaFile = new InputFile(buffer, buildMediaFilename(extractorId, ext));
   } else if (format.url?.[0]) {
     // No buffer — photo download was skipped; pass URL directly so Telegram fetches it.
     mediaFile = format.url[0];
