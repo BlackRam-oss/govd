@@ -72,6 +72,7 @@ async function downloadItem(ctx: ExtractorContext, item: MediaItem, index: numbe
 
     return downloaded;
   } catch (e) {
+    logger.warn({ index, formatId: format.formatId, type: format.type, url: format.url?.[0]?.slice(0, 80), err: (e as Error).message }, 'format download failed');
     return new DownloadedFormat({ index, error: e as Error });
   }
 }

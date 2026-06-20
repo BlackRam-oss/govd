@@ -14,7 +14,6 @@ export const TikTokVMExtractor = new Extractor({
   host: ['tiktok', 'vxtiktok'],
   redirect: true,
   async getFunc(ctx: ExtractorContext): Promise<{ media?: Media; url?: string }> {
-    // cobalt approach: redirect:"manual", parse <a href="..."> from body
     const res = await fetch(ctx.contentUrl, {
       redirect: 'manual',
       headers: { 'user-agent': UA_SHORT },
@@ -22,13 +21,18 @@ export const TikTokVMExtractor = new Extractor({
 
     let url: string | null = null;
 
-    const body = await res.text().catch(() => '');
-    if (body.startsWith('<a href="https://')) {
-      url = body.split('<a href="')[1]?.split('"')[0] ?? null;
+    // prefer Location header — well-formed URL, no HTML entities
+    url = res.headers.get('location');
+
+    // fallback: parse <a href="..."> from body (HTML-encoded — unescape &amp;)
+    if (!url) {
+      const body = await res.text().catch(() => '');
+      if (body.startsWith('<a href="https://')) {
+        const raw = body.split('<a href="')[1]?.split('"')[0] ?? null;
+        if (raw) url = raw.replace(/&amp;/g, '&');
+      }
     }
 
-    // fallback: Location header
-    if (!url) url = res.headers.get('location');
     // fallback: native fetch response.url (after any redirect)
     if (!url) url = res.url !== ctx.contentUrl ? res.url : null;
 

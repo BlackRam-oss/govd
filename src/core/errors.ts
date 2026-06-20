@@ -11,11 +11,15 @@ export function handleError(bot: Bot<Context>, ctx: Context, extractorCtx: Extra
   const lang = chat?.language || 'en';
 
   if (err instanceof BotError) {
+    logger.info({ errorId: err.id, extractor: extractorCtx.extractor.id, contentId: extractorCtx.contentId }, 'bot error');
     sendErrorMessage(bot, ctx, '', localizeError(err.id, lang));
     return;
   }
 
-  if (err === ErrNoMedia || (err instanceof Error && err.message === ErrNoMedia.message)) return;
+  if (err === ErrNoMedia || (err instanceof Error && err.message === ErrNoMedia.message)) {
+    logger.debug({ extractor: extractorCtx.extractor.id, contentId: extractorCtx.contentId }, 'no media found');
+    return;
+  }
 
   if (isChatWriteForbidden(err)) return;
   if (isPermissionDenied(err)) {
@@ -24,9 +28,10 @@ export function handleError(bot: Bot<Context>, ctx: Context, extractorCtx: Extra
   }
 
   const errorId = hashedError(err as Error);
-  logger.error({ err: (err as Error).message, errorId }, 'unexpected error');
+  const errMsg = (err as Error).message || String(err);
+  logger.error({ err: errMsg, errorId, extractor: extractorCtx.extractor.id, contentId: extractorCtx.contentId }, 'unexpected error');
 
-  sendErrorMessage(bot, ctx, errorId, localizeError('ErrorMessage', lang));
+  sendErrorMessage(bot, ctx, errorId, localizeError('ErrorMessage', lang), errMsg);
 
   db.logError(errorId, (err as Error).message);
 }
@@ -39,18 +44,26 @@ function isPermissionDenied(err: unknown): boolean {
   return (err as Error)?.message?.includes('not enough rights') ?? false;
 }
 
-function formatErrorMessage(ctx: Context, message: string, errorId: string): string {
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function formatErrorMessage(ctx: Context, message: string, errorId: string, detail?: string): string {
   const suffix = errorId
     ? (ctx.callbackQuery || ctx.inlineQuery ? ` [${errorId}]` : ` [<code>${errorId}</code>]`)
     : '';
-  return `⚠️ ${message}${suffix}`;
+  const detailPart = detail ? `\n<code>${escapeHtml(detail)}</code>` : '';
+  return `⚠️ ${message}${suffix}${detailPart}`;
 }
 
-function sendErrorMessage(bot: Bot<Context>, ctx: Context, errorId: string, message: string): void {
-  const text = formatErrorMessage(ctx, message, errorId);
+function sendErrorMessage(bot: Bot<Context>, ctx: Context, errorId: string, message: string, detail?: string): void {
+  const text = formatErrorMessage(ctx, message, errorId, detail);
 
   if (ctx.message) {
-    ctx.reply(text, { parse_mode: 'HTML' }).catch(() => {});
+    ctx.reply(text, {
+      parse_mode: 'HTML',
+      reply_parameters: { message_id: ctx.message.message_id, allow_sending_without_reply: true },
+    }).catch(() => {});
   } else if (ctx.callbackQuery) {
     ctx.answerCallbackQuery({ text, show_alert: true }).catch(() => {});
   } else if (ctx.inlineQuery) {
