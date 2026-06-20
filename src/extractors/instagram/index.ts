@@ -345,18 +345,48 @@ function extractOldPost(data: any): IgItem[] {
 
 async function getErrorContext(shortcode: string): Promise<Error | null> {
   try {
-    const body = new FormData();
-    body.append('route_urls', JSON.stringify([`https://www.instagram.com/p/${shortcode}/`]));
+    const params = await getGQLParams(shortcode);
+    if (!params) return null;
+
+    const { headers, body } = params;
+
     const resp = await fetch('https://www.instagram.com/ajax/bulk-route-definitions/', {
       method: 'POST',
-      headers: { ...embedHeaders },
-      body,
+      headers: {
+        ...embedHeaders,
+        ...headers,
+        'content-type': 'application/x-www-form-urlencoded',
+        'X-Ig-D': 'www',
+      },
+      body: new URLSearchParams({
+        'route_urls[0]': `/p/${shortcode}/`,
+        routing_namespace: 'igx_www',
+        ...body,
+      }).toString(),
     });
-    const json = await resp.json() as any;
-    const props = json?.payload?.payloads?.[`/p/${shortcode}/`]?.result?.exports?.rootView?.props;
-    if (!props) return null;
-    if (props.is_private) return Errors.AuthenticationNeeded;
-    if (props.viewer_has_age_restriction) return Errors.AgeRestricted;
+
+    const text = await resp.text();
+
+    if (text.includes('"tracePolicy":"polaris.privatePostPage"')) {
+      return Errors.AuthenticationNeeded;
+    }
+
+    const mediaMatch = text.match(/"media_id":\s*?"(\d+)","media_owner_id":\s*?"(\d+)"/);
+    if (mediaMatch) {
+      const [, mediaId, mediaOwnerId] = mediaMatch;
+      const rulingURL = new URL('https://www.instagram.com/api/v1/web/get_ruling_for_media_content_logged_out');
+      rulingURL.searchParams.set('media_id', mediaId);
+      rulingURL.searchParams.set('owner_id', mediaOwnerId);
+
+      const ruling = await fetch(rulingURL, {
+        headers: { ...embedHeaders, ...headers },
+      }).then(r => r.json() as Promise<any>).catch(() => ({}));
+
+      if (ruling?.title?.includes('Restricted')) {
+        return Errors.AgeRestricted;
+      }
+    }
+
     return null;
   } catch {
     return null;
