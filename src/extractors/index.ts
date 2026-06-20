@@ -115,19 +115,14 @@ export function fromURL(url: string): { loop: () => Promise<ExtractorContext | n
       }
 
       ctx.debug('following redirect');
-      try {
-        const response = await extractor.getFunc(ctx);
-        if (!response?.url) {
-          ctx.debug('no suitable redirect URL');
-          return null;
-        }
-        ctx.debug(`redirected to ${response.url}`);
-        currentURL = response.url;
-        redirectCount++;
-      } catch (e) {
-        ctx.error(`redirect failed: ${(e as Error).message}`);
+      const response = await extractor.getFunc(ctx);
+      if (!response?.url) {
+        ctx.debug('no suitable redirect URL');
         return null;
       }
+      ctx.debug(`redirected to ${response.url}`);
+      currentURL = response.url;
+      redirectCount++;
     }
 
     logger.error(`exceeded maximum redirects for URL: ${url}`);
