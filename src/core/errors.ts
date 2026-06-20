@@ -63,7 +63,9 @@ function sendErrorMessage(bot: Bot<Context>, ctx: Context, errorId: string, mess
     ctx.reply(text, {
       parse_mode: 'HTML',
       reply_parameters: { message_id: ctx.message.message_id, allow_sending_without_reply: true },
-    }).catch(() => {});
+    }).catch((err: Error) => {
+      logger.warn({ err: err.message }, 'failed to send error reply');
+    });
   } else if (ctx.callbackQuery) {
     ctx.answerCallbackQuery({ text, show_alert: true }).catch(() => {});
   } else if (ctx.inlineQuery) {

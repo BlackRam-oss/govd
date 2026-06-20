@@ -81,6 +81,15 @@ async function getMedia(ctx: ExtractorContext): Promise<Media> {
 
   const html = await res.text();
 
+  // Detect login redirect — TikTok geo-restricts or requires auth
+  try {
+    if (res.url && new URL(res.url).pathname.startsWith('/login')) {
+      throw Errors.AuthenticationNeeded;
+    }
+  } catch (e) {
+    if ((e as { id?: string }).id) throw e;
+  }
+
   let detail: TikTokItemStruct;
   try {
     const json = html
@@ -102,6 +111,7 @@ async function getMedia(ctx: ExtractorContext): Promise<Media> {
     const itemStruct = videoDetail.itemInfo?.itemStruct;
     if (!itemStruct) throw new Error('itemStruct not found');
     if (videoDetail.itemInfo?.statusMsg) throw Errors.Unavailable;
+    if (itemStruct.isContentClassified) throw Errors.AgeRestricted;
 
     detail = itemStruct;
   } catch (e) {

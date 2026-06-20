@@ -67,7 +67,9 @@ function sendResolutionError(ctx: Context, e: unknown, lang: string): void {
   ctx.reply(text, {
     parse_mode: 'HTML',
     reply_parameters: { message_id: ctx.message.message_id, allow_sending_without_reply: true },
-  }).catch(() => {});
+  }).catch((err: Error) => {
+    logger.warn({ err: err.message }, 'failed to send resolution error reply');
+  });
 }
 
 const resolutionErrors: Record<string, string> = {

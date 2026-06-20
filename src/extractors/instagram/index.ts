@@ -341,6 +341,28 @@ function extractOldPost(data: any): IgItem[] {
   return results;
 }
 
+// ── Error context (cobalt: /ajax/bulk-route-definitions/) ────────────────────
+
+async function getErrorContext(shortcode: string): Promise<Error | null> {
+  try {
+    const body = new FormData();
+    body.append('route_urls', JSON.stringify([`https://www.instagram.com/p/${shortcode}/`]));
+    const resp = await fetch('https://www.instagram.com/ajax/bulk-route-definitions/', {
+      method: 'POST',
+      headers: { ...embedHeaders },
+      body,
+    });
+    const json = await resp.json() as any;
+    const props = json?.payload?.payloads?.[`/p/${shortcode}/`]?.result?.exports?.rootView?.props;
+    if (!props) return null;
+    if (props.is_private) return Errors.AuthenticationNeeded;
+    if (props.viewer_has_age_restriction) return Errors.AgeRestricted;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 // ── Main post fetcher (mirrors cobalt's getPost flow) ─────────────────────────
 
 async function getPost(ctx: ExtractorContext): Promise<Media> {
@@ -388,7 +410,8 @@ async function getPost(ctx: ExtractorContext): Promise<Media> {
 
   if (!items.length) {
     logger.warn({ shortcode }, 'instagram: all methods failed');
-    throw Errors.Unavailable;
+    const contextError = await getErrorContext(shortcode);
+    throw contextError ?? Errors.Unavailable;
   }
 
   const media = ctx.newMedia();
