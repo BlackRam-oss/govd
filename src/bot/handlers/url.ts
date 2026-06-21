@@ -28,7 +28,7 @@ export async function urlHandler(ctx: Context): Promise<void> {
   try {
     extractorCtx = await resolveURL(url);
   } catch (e) {
-    sendResolutionError(ctx, e, chat?.language || Env.DefaultLanguage);
+    await sendResolutionError(ctx, e, chat?.language || Env.DefaultLanguage);
     return;
   }
 
@@ -46,14 +46,14 @@ export async function urlHandler(ctx: Context): Promise<void> {
     await handleDownloadTask((ctx.api ? { api: ctx.api, botInfo: ctx.me } : ctx) as any, ctx, extractorCtx);
   } catch (e) {
     try {
-      handleError(ctx as any, ctx, extractorCtx, e);
+      await handleError(ctx as any, ctx, extractorCtx, e);
     } catch (handleErr) {
       logger.error({ err: (handleErr as Error).message }, 'handleError threw unexpectedly');
     }
   }
 }
 
-function sendResolutionError(ctx: Context, e: unknown, lang: string): void {
+async function sendResolutionError(ctx: Context, e: unknown, lang: string): Promise<void> {
   if (!ctx.message) return;
 
   let text: string;
@@ -68,12 +68,14 @@ function sendResolutionError(ctx: Context, e: unknown, lang: string): void {
     text = `⚠️ failed to resolve url [<code>${errorId}</code>]\n<code>${errMsg}</code>`;
   }
 
-  ctx.reply(text, {
-    parse_mode: 'HTML',
-    reply_parameters: { message_id: ctx.message.message_id, allow_sending_without_reply: true },
-  }).catch((err: Error) => {
-    logger.warn({ err: err.message }, 'failed to send resolution error reply');
-  });
+  try {
+    await ctx.reply(text, {
+      parse_mode: 'HTML',
+      reply_parameters: { message_id: ctx.message.message_id, allow_sending_without_reply: true },
+    });
+  } catch (err) {
+    logger.warn({ err: (err as Error).message }, 'failed to send resolution error reply');
+  }
 }
 
 const resolutionErrors: Record<string, string> = {

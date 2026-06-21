@@ -7,13 +7,13 @@ import { t } from '../localization/index.js';
 
 export const ErrNoMedia = new Error('no media found');
 
-export function handleError(bot: Bot<Context>, ctx: Context, extractorCtx: ExtractorContext, err: unknown): void {
+export async function handleError(bot: Bot<Context>, ctx: Context, extractorCtx: ExtractorContext, err: unknown): Promise<void> {
   const chat = extractorCtx.chat;
   const lang = chat?.language || 'en';
 
   if (err instanceof BotError) {
     logger.info({ errorId: err.id, extractor: extractorCtx.extractor.id, contentId: extractorCtx.contentId }, 'bot error');
-    sendErrorMessage(bot, ctx, '', localizeError(err.id, lang));
+    await sendErrorMessage(bot, ctx, '', localizeError(err.id, lang));
     return;
   }
 
@@ -24,7 +24,7 @@ export function handleError(bot: Bot<Context>, ctx: Context, extractorCtx: Extra
 
   if (isChatWriteForbidden(err)) return;
   if (isPermissionDenied(err)) {
-    sendErrorMessage(bot, ctx, '', localizeError('ErrorPermissionDenied', lang));
+    await sendErrorMessage(bot, ctx, '', localizeError('ErrorPermissionDenied', lang));
     return;
   }
 
@@ -32,7 +32,7 @@ export function handleError(bot: Bot<Context>, ctx: Context, extractorCtx: Extra
   const errMsg = (err as Error).message || String(err);
   logger.error({ err: errMsg, errorId, extractor: extractorCtx.extractor.id, contentId: extractorCtx.contentId }, 'unexpected error');
 
-  sendErrorMessage(bot, ctx, errorId, localizeError('ErrorMessage', lang), errMsg);
+  await sendErrorMessage(bot, ctx, errorId, localizeError('ErrorMessage', lang), errMsg);
 
   db.logError(errorId, (err as Error).message);
 }
@@ -57,34 +57,32 @@ function formatErrorMessage(ctx: Context, message: string, errorId: string, deta
   return `⚠️ ${message}${suffix}${detailPart}`;
 }
 
-function sendErrorMessage(bot: Bot<Context>, ctx: Context, errorId: string, message: string, detail?: string): void {
+async function sendErrorMessage(bot: Bot<Context>, ctx: Context, errorId: string, message: string, detail?: string): Promise<void> {
   try {
     const text = formatErrorMessage(ctx, message, errorId, detail);
 
     if (ctx.message) {
-      ctx.reply(text, {
+      await ctx.reply(text, {
         parse_mode: 'HTML',
         reply_parameters: { message_id: ctx.message.message_id, allow_sending_without_reply: true },
-      }).catch((err: Error) => {
-        logger.warn({ err: err.message }, 'failed to send error reply');
       });
     } else if (ctx.callbackQuery) {
-      ctx.answerCallbackQuery({ text, show_alert: true }).catch(() => {});
+      await ctx.answerCallbackQuery({ text, show_alert: true });
     } else if (ctx.inlineQuery) {
-      ctx.answerInlineQuery([], {
+      await ctx.answerInlineQuery([], {
         cache_time: 0,
         button: { text, start_parameter: 'start' },
-      }).catch(() => {});
+      });
     } else if (ctx.chosenInlineResult) {
       const inlineId = ctx.chosenInlineResult.inline_message_id;
       if (inlineId) {
-        bot.api.editMessageTextInline(inlineId, text, {
+        await bot.api.editMessageTextInline(inlineId, text, {
           link_preview_options: { is_disabled: true },
-        }).catch(() => {});
+        });
       }
     }
   } catch (err) {
-    logger.error({ err: (err as Error).message }, 'sendErrorMessage threw synchronously');
+    logger.warn({ err: (err as Error).message }, 'failed to send error message');
   }
 }
 
