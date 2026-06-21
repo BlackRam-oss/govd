@@ -58,29 +58,33 @@ function formatErrorMessage(ctx: Context, message: string, errorId: string, deta
 }
 
 function sendErrorMessage(bot: Bot<Context>, ctx: Context, errorId: string, message: string, detail?: string): void {
-  const text = formatErrorMessage(ctx, message, errorId, detail);
+  try {
+    const text = formatErrorMessage(ctx, message, errorId, detail);
 
-  if (ctx.message) {
-    ctx.reply(text, {
-      parse_mode: 'HTML',
-      reply_parameters: { message_id: ctx.message.message_id, allow_sending_without_reply: true },
-    }).catch((err: Error) => {
-      logger.warn({ err: err.message }, 'failed to send error reply');
-    });
-  } else if (ctx.callbackQuery) {
-    ctx.answerCallbackQuery({ text, show_alert: true }).catch(() => {});
-  } else if (ctx.inlineQuery) {
-    ctx.answerInlineQuery([], {
-      cache_time: 0,
-      button: { text, start_parameter: 'start' },
-    }).catch(() => {});
-  } else if (ctx.chosenInlineResult) {
-    const inlineId = ctx.chosenInlineResult.inline_message_id;
-    if (inlineId) {
-      bot.api.editMessageTextInline(inlineId, text, {
-        link_preview_options: { is_disabled: true },
+    if (ctx.message) {
+      ctx.reply(text, {
+        parse_mode: 'HTML',
+        reply_parameters: { message_id: ctx.message.message_id, allow_sending_without_reply: true },
+      }).catch((err: Error) => {
+        logger.warn({ err: err.message }, 'failed to send error reply');
+      });
+    } else if (ctx.callbackQuery) {
+      ctx.answerCallbackQuery({ text, show_alert: true }).catch(() => {});
+    } else if (ctx.inlineQuery) {
+      ctx.answerInlineQuery([], {
+        cache_time: 0,
+        button: { text, start_parameter: 'start' },
       }).catch(() => {});
+    } else if (ctx.chosenInlineResult) {
+      const inlineId = ctx.chosenInlineResult.inline_message_id;
+      if (inlineId) {
+        bot.api.editMessageTextInline(inlineId, text, {
+          link_preview_options: { is_disabled: true },
+        }).catch(() => {});
+      }
     }
+  } catch (err) {
+    logger.error({ err: (err as Error).message }, 'sendErrorMessage threw synchronously');
   }
 }
 
@@ -104,7 +108,11 @@ const errorMessages: Record<string, string> = {
 };
 
 function localizeError(id: string, lang: string): string {
-  const localized = t(id, lang);
-  if (localized !== id) return localized;
+  try {
+    const localized = t(id, lang);
+    if (localized !== id) return localized;
+  } catch {
+    // i18next not ready — fall through to static messages
+  }
   return errorMessages[id] || errorMessages.ErrorMessage;
 }

@@ -45,7 +45,11 @@ export async function urlHandler(ctx: Context): Promise<void> {
   try {
     await handleDownloadTask((ctx.api ? { api: ctx.api, botInfo: ctx.me } : ctx) as any, ctx, extractorCtx);
   } catch (e) {
-    handleError(ctx as any, ctx, extractorCtx, e);
+    try {
+      handleError(ctx as any, ctx, extractorCtx, e);
+    } catch (handleErr) {
+      logger.error({ err: (handleErr as Error).message }, 'handleError threw unexpectedly');
+    }
   }
 }
 
