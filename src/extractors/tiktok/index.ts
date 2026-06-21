@@ -112,7 +112,6 @@ async function getMedia(ctx: ExtractorContext): Promise<Media> {
     if (!itemStruct) throw new Error('itemStruct not found');
     if (videoDetail.itemInfo?.statusMsg) throw Errors.Unavailable;
     if (itemStruct.isContentClassified) throw Errors.AgeRestricted;
-    if (!itemStruct.author) throw Errors.Unavailable;
 
     detail = itemStruct;
   } catch (e) {
