@@ -3,6 +3,7 @@ import * as db from '../database/index.js';
 import logger from '../logger/index.js';
 import { Bot, Context } from 'grammy';
 import { ExtractorContext } from '../models/index.js';
+import { t } from '../localization/index.js';
 
 export const ErrNoMedia = new Error('no media found');
 
@@ -103,5 +104,7 @@ const errorMessages: Record<string, string> = {
 };
 
 function localizeError(id: string, lang: string): string {
+  const localized = t(id, lang);
+  if (localized !== id) return localized;
   return errorMessages[id] || errorMessages.ErrorMessage;
 }

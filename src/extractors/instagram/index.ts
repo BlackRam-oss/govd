@@ -55,9 +55,8 @@ export const InstagramStoriesExtractor = new Extractor({
   urlPattern: /https:\/\/(www\.)?(?:dd)?instagram\.com\/stories\/[a-zA-Z0-9._]+\/(?<id>\d+)/,
   host: instagramHost,
   hidden: true,
-  async getFunc(ctx: ExtractorContext): Promise<{ media?: Media; url?: string }> {
-    const media = await getPost(ctx);
-    return { media };
+  async getFunc(_ctx: ExtractorContext): Promise<{ media?: Media; url?: string }> {
+    throw Errors.InstagramStoriesUnsupported;
   },
 });
 

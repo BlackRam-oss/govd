@@ -227,6 +227,7 @@ export const Errors = {
   PaidContent:                  new BotError('ErrorPaidContent', 'paid content'),
   AgeRestricted:                new BotError('ErrorAgeRestricted', 'age-restricted content'),
   PermissionDenied:             new BotError('ErrorPermissionDenied', 'bot lacks permissions'),
+  InstagramStoriesUnsupported:  new BotError('ErrorInstagramStoriesUnsupported', 'instagram stories cannot be downloaded by this bot'),
 };
 
 export function ptr<T>(v: T): T { return v; }

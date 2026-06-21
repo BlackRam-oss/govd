@@ -254,6 +254,19 @@ const messages: Messages = {
     fr: 'désactivé', pt: 'desativado', ru: 'отключено', zh: '已禁用',
     ar: 'معطّل', ja: '無効', ko: '비활성화됨',
   },
+  ErrorInstagramStoriesUnsupported: {
+    en: 'instagram stories cannot be downloaded by this bot. try a dedicated app on android/ios or visit storiesig.com',
+    it: 'le storie instagram non possono essere scaricate da questo bot. prova un\'app dedicata su android/ios oppure visita storiesig.com',
+    de: 'instagram-stories können von diesem bot nicht heruntergeladen werden. versuche eine dedizierte app auf android/ios oder besuche storiesig.com',
+    es: 'este bot no puede descargar las historias de instagram. prueba una aplicación dedicada en android/ios o visita storiesig.com',
+    fr: 'les stories instagram ne peuvent pas être téléchargées par ce bot. essayez une application dédiée sur android/ios ou visitez storiesig.com',
+    pt: 'as histórias do instagram não podem ser baixadas por este bot. tente um aplicativo dedicado no android/ios ou acesse storiesig.com',
+    ru: 'истории instagram не могут быть загружены этим ботом. попробуйте специальное приложение на android/ios или зайдите на storiesig.com',
+    zh: '此机器人无法下载 instagram 限时动态。请尝试 android/ios 上的专用应用，或访问 storiesig.com',
+    ar: 'لا يمكن لهذا البوت تنزيل قصص انستغرام. جرّب تطبيقاً مخصصاً على أندرويد/ios أو زُر storiesig.com',
+    ja: 'このボットではinstagramのストーリーをダウンロードできません。android/ios専用アプリを試すか、storiesig.comをご利用ください',
+    ko: '이 봇으로는 인스타그램 스토리를 다운로드할 수 없습니다. android/ios 전용 앱을 사용하거나 storiesig.com을 방문하세요',
+  },
 };
 
 function buildResources(msgs: Messages): Record<string, { translation: Record<string, string> }> {
