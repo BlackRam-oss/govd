@@ -6,6 +6,7 @@ import { getOrCreateChat, ChatRow } from '../../database/index.js';
 import * as db from '../../database/index.js';
 import { Env } from '../../config/index.js';
 import logger from '../../logger/index.js';
+import { t } from '../../localization/index.js';
 import { Context } from 'grammy';
 
 export function urlFilter(ctx: Context): boolean {
@@ -58,14 +59,14 @@ async function sendResolutionError(ctx: Context, e: unknown, lang: string): Prom
 
   let text: string;
   if (e instanceof BotError) {
-    text = `⚠️ ${localizeResolutionError(e.id)}`;
+    text = `⚠️ ${localizeResolutionError(e.id, lang)}`;
     logger.info({ errorId: e.id }, 'resolution bot error');
   } else {
     const errorId = hashedError(e as Error);
     const errMsg = ((e as Error).message || String(e)).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     logger.error({ err: (e as Error).message, errorId }, 'url resolution failed');
     db.logError(errorId, (e as Error).message);
-    text = `⚠️ failed to resolve url [<code>${errorId}</code>]\n<code>${errMsg}</code>`;
+    text = `⚠️ ${t('ErrorResolutionFailed', lang)} [<code>${errorId}</code>]\n<code>${errMsg}</code>`;
   }
 
   try {
@@ -78,14 +79,10 @@ async function sendResolutionError(ctx: Context, e: unknown, lang: string): Prom
   }
 }
 
-const resolutionErrors: Record<string, string> = {
-  ErrorGeoRestrictedContent: 'this content has geo-restrictions',
-  ErrorUnavailable: 'this content is unavailable',
-  ErrorAuthenticationNeeded: 'this instance is not authenticated with this service',
-};
-
-function localizeResolutionError(id: string): string {
-  return resolutionErrors[id] || 'failed to resolve url';
+function localizeResolutionError(id: string, lang: string): string {
+  const localized = t(id, lang);
+  if (localized !== id) return localized;
+  return t('ErrorResolutionFailed', lang);
 }
 
 export function getChatFromCtx(ctx: Context): ChatRow | null {
