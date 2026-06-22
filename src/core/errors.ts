@@ -7,13 +7,26 @@ import { t } from '../localization/index.js';
 
 export const ErrNoMedia = new Error('no media found');
 
+type AltSite = { label: string; url: string };
+
+const altSiteMap: Record<string, Record<string, AltSite[]>> = {
+  tiktok: {
+    ErrorGeoRestrictedContent: [{ label: 'snaptik.app', url: 'https://snaptik.app' }],
+    ErrorAgeRestricted:        [{ label: 'snaptik.app', url: 'https://snaptik.app' }],
+  },
+  youtube: {
+    ErrorAgeRestricted: [{ label: 'yewtu.be', url: 'https://yewtu.be' }],
+  },
+};
+
 export async function handleError(bot: Bot<Context>, ctx: Context, extractorCtx: ExtractorContext, err: unknown): Promise<void> {
   const chat = extractorCtx.chat;
   const lang = chat?.language || 'en';
 
   if (err instanceof BotError) {
     logger.info({ errorId: err.id, extractor: extractorCtx.extractor.id, contentId: extractorCtx.contentId }, 'bot error');
-    await sendErrorMessage(bot, ctx, '', localizeError(err.id, lang));
+    const altSites = altSiteMap[extractorCtx.extractor.id]?.[err.id] ?? [];
+    await sendErrorMessage(bot, ctx, '', localizeError(err.id, lang), undefined, altSites);
     return;
   }
 
@@ -57,14 +70,18 @@ function formatErrorMessage(ctx: Context, message: string, errorId: string, deta
   return `⚠️ ${message}${suffix}${detailPart}`;
 }
 
-async function sendErrorMessage(bot: Bot<Context>, ctx: Context, errorId: string, message: string, detail?: string): Promise<void> {
+async function sendErrorMessage(bot: Bot<Context>, ctx: Context, errorId: string, message: string, detail?: string, altSites: AltSite[] = []): Promise<void> {
   try {
     const text = formatErrorMessage(ctx, message, errorId, detail);
+    const replyMarkup = altSites.length > 0
+      ? { inline_keyboard: [altSites.map(s => ({ text: s.label, url: s.url }))] }
+      : undefined;
 
     if (ctx.message) {
       await ctx.reply(text, {
         parse_mode: 'HTML',
         reply_parameters: { message_id: ctx.message.message_id, allow_sending_without_reply: true },
+        reply_markup: replyMarkup,
       });
     } else if (ctx.callbackQuery) {
       await ctx.answerCallbackQuery({ text, show_alert: true });
