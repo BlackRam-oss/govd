@@ -17,6 +17,9 @@ const altSiteMap: Record<string, Record<string, AltSite[]>> = {
   youtube: {
     ErrorAgeRestricted: [{ label: 'yewtu.be', url: 'https://yewtu.be' }],
   },
+  instagram: {
+    ErrorInstagramStoriesUnsupported: [{ label: 'igram.site', url: 'https://igram.site' }],
+  },
 };
 
 export async function handleError(bot: Bot<Context>, ctx: Context, extractorCtx: ExtractorContext, err: unknown): Promise<void> {
@@ -26,7 +29,9 @@ export async function handleError(bot: Bot<Context>, ctx: Context, extractorCtx:
   if (err instanceof BotError) {
     logger.info({ errorId: err.id, extractor: extractorCtx.extractor.id, contentId: extractorCtx.contentId }, 'bot error');
     const altSites = altSiteMap[extractorCtx.extractor.id]?.[err.id] ?? [];
-    await sendErrorMessage(bot, ctx, '', localizeError(err.id, lang), undefined, altSites);
+    const baseMsg = localizeError(err.id, lang);
+    const msg = altSites.length > 0 ? `${baseMsg}\n${localizeError('ErrorAltSitesPrefix', lang)}` : baseMsg;
+    await sendErrorMessage(bot, ctx, '', msg, undefined, altSites);
     return;
   }
 
@@ -109,7 +114,8 @@ const errorMessages: Record<string, string> = {
   ErrorUnsupportedImageFormat: 'unsupported image format',
   ErrorMediaAlbumLimitExceeded: 'media album limit exceeds the maximum allowed for this group',
   ErrorMediaAlbumGlobalLimitExceeded: 'media album limit exceeds the maximum allowed for this instance',
-  ErrorGeoRestrictedContent: 'this content has geo-restrictions',
+  ErrorGeoRestrictedContent: 'this content is not available in your region',
+  ErrorAltSitesPrefix: 'you can use one of the following sites:',
   ErrorNSFWNotAllowed: 'this content is nsfw and cannot be downloaded here',
   ErrorInlineMediaAlbum: 'media albums not supported in inline mode',
   ErrorAuthenticationNeeded: 'this instance is not authenticated with this service',
