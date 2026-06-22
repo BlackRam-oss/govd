@@ -3,7 +3,8 @@ import { MediaType, MediaCodec } from '../../database/index.js';
 import { Errors } from '../../util/index.js';
 import logger from '../../logger/index.js';
 
-const UA_FULL = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36';
+// Same UA as cobalt — stripped for redirect, full for page fetch
+const UA_FULL = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 const UA_SHORT = UA_FULL.split(' Chrome/1')[0];
 
 export const TikTokVMExtractor = new Extractor({
@@ -64,33 +65,21 @@ export const TikTokExtractor = new Extractor({
   },
 });
 
-const PAGE_HEADERS = {
-  'user-agent': UA_FULL,
-  'accept-language': 'en-US,en;q=0.9',
-  'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-  'sec-ch-ua': '"Chromium";v="136", "Google Chrome";v="136", "Not-A.Brand";v="24"',
-  'sec-ch-ua-mobile': '?0',
-  'sec-ch-ua-platform': '"Windows"',
-  'sec-fetch-site': 'none',
-  'sec-fetch-mode': 'navigate',
-  'sec-fetch-user': '?1',
-  'sec-fetch-dest': 'document',
-  'upgrade-insecure-requests': '1',
-  'cache-control': 'max-age=0',
-};
-
 async function getMedia(ctx: ExtractorContext): Promise<Media> {
-  // Try the canonical URL first; fall back to @i/video/ if it redirects away from the video page
-  const pageUrl = ctx.contentUrl.includes('/video/') || ctx.contentUrl.includes('/photo/')
-    ? ctx.contentUrl
-    : `https://www.tiktok.com/@i/video/${ctx.contentId}`;
-
-  const res = await fetch(pageUrl, { headers: PAGE_HEADERS });
+  // cobalt: always use @i/video/ path, even for photo posts
+  const res = await fetch(`https://www.tiktok.com/@i/video/${ctx.contentId}`, {
+    headers: {
+      'user-agent': UA_FULL,
+      'accept-language': 'en-US,en;q=0.9',
+      'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'referer': 'https://www.tiktok.com/',
+    },
+  });
 
   // Accumulate cookies for CDN auth
-  let cookieHeader = mergeCookies('', getSetCookies(res.headers));
+  const cookieHeader = mergeCookies('', getSetCookies(res.headers));
 
-  let html = await res.text();
+  const html = await res.text();
 
   // Detect login redirect — TikTok geo-restricts or requires auth
   try {
@@ -101,21 +90,6 @@ async function getMedia(ctx: ExtractorContext): Promise<Media> {
     if ((e as { id?: string }).id) throw e;
   }
 
-  // If the canonical URL didn't include the data script, retry with @i/video/
-  if (!html.includes('__UNIVERSAL_DATA_FOR_REHYDRATION__') && pageUrl !== `https://www.tiktok.com/@i/video/${ctx.contentId}`) {
-    logger.info({ pageUrl }, 'tiktok: retrying with @i/video/ path');
-    const res2 = await fetch(`https://www.tiktok.com/@i/video/${ctx.contentId}`, { headers: PAGE_HEADERS });
-    cookieHeader = mergeCookies(cookieHeader, getSetCookies(res2.headers));
-    html = await res2.text();
-    try {
-      if (res2.url && new URL(res2.url).pathname.startsWith('/login')) {
-        throw Errors.AuthenticationNeeded;
-      }
-    } catch (e) {
-      if ((e as { id?: string }).id) throw e;
-    }
-  }
-
   let detail: TikTokItemStruct;
   try {
     const json = html
@@ -123,7 +97,7 @@ async function getMedia(ctx: ExtractorContext): Promise<Media> {
       ?.split('</script>')[0];
 
     if (!json) {
-      logger.warn({ status: res.status, pageUrl, snippet: html.slice(0, 500) }, 'tiktok: universal data script not found');
+      logger.warn({ status: res.status, snippet: html.slice(0, 400) }, 'tiktok: universal data script not found');
       throw new Error('universal data script not found');
     }
 
