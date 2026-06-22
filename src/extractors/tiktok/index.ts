@@ -79,18 +79,57 @@ const PAGE_HEADERS = {
   'cache-control': 'max-age=0',
 };
 
+async function fetchItemStructFromAPI(contentId: string, cookies: string): Promise<TikTokItemStruct> {
+  const params = new URLSearchParams({
+    itemId: contentId,
+    aid: '1988',
+    app_language: 'en-US',
+    browser_language: 'en-US',
+    channel: 'tiktok_web',
+    device_platform: 'web_pc',
+    os: 'windows',
+    region: 'US',
+    screen_height: '1080',
+    screen_width: '1920',
+    webcast_language: 'en-US',
+  });
+
+  const res = await fetch(`https://www.tiktok.com/api/item/detail/?${params}`, {
+    headers: {
+      'user-agent': UA_FULL,
+      'accept': 'application/json, text/plain, */*',
+      'sec-ch-ua': '"Chromium";v="136", "Google Chrome";v="136", "Not-A.Brand";v="24"',
+      'sec-ch-ua-mobile': '?0',
+      'sec-ch-ua-platform': '"Windows"',
+      'sec-fetch-site': 'same-origin',
+      'sec-fetch-mode': 'cors',
+      'sec-fetch-dest': 'empty',
+      'referer': `https://www.tiktok.com/@i/video/${contentId}`,
+      ...(cookies ? { cookie: cookies } : {}),
+    },
+  });
+
+  const data = await res.json() as { statusCode?: number; itemInfo?: TikTokVideoDetail['itemInfo'] };
+  logger.info({ apiStatus: res.status, statusCode: data.statusCode, hasItemInfo: !!data.itemInfo }, 'tiktok: api response');
+
+  if (data.statusCode !== 0 && data.statusCode !== undefined) throw new Error(`api statusCode ${data.statusCode}`);
+
+  const itemStruct = data.itemInfo?.itemStruct;
+  if (!itemStruct) throw new Error('itemStruct not found in api response');
+  if (data.itemInfo?.statusMsg) throw Errors.Unavailable;
+  if (itemStruct.isContentClassified) throw Errors.AgeRestricted;
+
+  return itemStruct;
+}
+
 async function getMedia(ctx: ExtractorContext): Promise<Media> {
-  // Try the canonical URL first; fall back to @i/video/ if it redirects away from the video page
   const pageUrl = ctx.contentUrl.includes('/video/') || ctx.contentUrl.includes('/photo/')
     ? ctx.contentUrl
     : `https://www.tiktok.com/@i/video/${ctx.contentId}`;
 
   const res = await fetch(pageUrl, { headers: PAGE_HEADERS });
-
-  // Accumulate cookies for CDN auth
   let cookieHeader = mergeCookies('', getSetCookies(res.headers));
-
-  let html = await res.text();
+  const html = await res.text();
 
   // Detect login redirect — TikTok geo-restricts or requires auth
   try {
@@ -101,48 +140,45 @@ async function getMedia(ctx: ExtractorContext): Promise<Media> {
     if ((e as { id?: string }).id) throw e;
   }
 
-  // If the canonical URL didn't include the data script, retry with @i/video/
-  if (!html.includes('__UNIVERSAL_DATA_FOR_REHYDRATION__') && pageUrl !== `https://www.tiktok.com/@i/video/${ctx.contentId}`) {
-    logger.info({ pageUrl }, 'tiktok: retrying with @i/video/ path');
-    const res2 = await fetch(`https://www.tiktok.com/@i/video/${ctx.contentId}`, { headers: PAGE_HEADERS });
-    cookieHeader = mergeCookies(cookieHeader, getSetCookies(res2.headers));
-    html = await res2.text();
+  let detail: TikTokItemStruct;
+
+  if (html.includes('__UNIVERSAL_DATA_FOR_REHYDRATION__')) {
+    // Happy path: parse embedded JSON from the page
     try {
-      if (res2.url && new URL(res2.url).pathname.startsWith('/login')) {
-        throw Errors.AuthenticationNeeded;
-      }
+      const json = html
+        .split('<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application/json">')[1]
+        ?.split('</script>')[0];
+
+      if (!json) throw new Error('split returned empty');
+
+      const data = JSON.parse(json) as Record<string, unknown>;
+      const scope = data['__DEFAULT_SCOPE__'] as Record<string, unknown>;
+      const videoDetail = scope?.['webapp.video-detail'] as TikTokVideoDetail | undefined;
+
+      if (!videoDetail) throw new Error('webapp.video-detail not found');
+      if (videoDetail.statusMsg) throw Errors.Unavailable;
+
+      const itemStruct = videoDetail.itemInfo?.itemStruct;
+      if (!itemStruct) throw new Error('itemStruct not found');
+      if (videoDetail.itemInfo?.statusMsg) throw Errors.Unavailable;
+      if (itemStruct.isContentClassified) throw Errors.AgeRestricted;
+
+      detail = itemStruct;
     } catch (e) {
       if ((e as { id?: string }).id) throw e;
+      throw new Error(`tiktok: parse error — ${(e as Error).message}`);
     }
-  }
-
-  let detail: TikTokItemStruct;
-  try {
-    const json = html
-      .split('<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application/json">')[1]
-      ?.split('</script>')[0];
-
-    if (!json) {
-      logger.warn({ status: res.status, pageUrl, snippet: html.slice(0, 500) }, 'tiktok: universal data script not found');
-      throw new Error('universal data script not found');
+  } else {
+    // WAF challenge or missing script — fall back to the internal JSON API
+    const isWaf = html.includes('slardar-config');
+    logger.info({ contentId: ctx.contentId, isWaf, status: res.status }, 'tiktok: html missing rehydration data, trying api');
+    try {
+      detail = await fetchItemStructFromAPI(ctx.contentId, cookieHeader);
+    } catch (e) {
+      if ((e as { id?: string }).id) throw e;
+      logger.warn({ snippet: html.slice(0, 500) }, 'tiktok: api fallback failed');
+      throw new Error(`tiktok: parse error — api fallback: ${(e as Error).message}`);
     }
-
-    const data = JSON.parse(json) as Record<string, unknown>;
-    const scope = data['__DEFAULT_SCOPE__'] as Record<string, unknown>;
-    const videoDetail = scope?.['webapp.video-detail'] as TikTokVideoDetail | undefined;
-
-    if (!videoDetail) throw new Error('webapp.video-detail not found');
-    if (videoDetail.statusMsg) throw Errors.Unavailable;
-
-    const itemStruct = videoDetail.itemInfo?.itemStruct;
-    if (!itemStruct) throw new Error('itemStruct not found');
-    if (videoDetail.itemInfo?.statusMsg) throw Errors.Unavailable;
-    if (itemStruct.isContentClassified) throw Errors.AgeRestricted;
-
-    detail = itemStruct;
-  } catch (e) {
-    if ((e as { id?: string }).id) throw e;
-    throw new Error(`tiktok: parse error — ${(e as Error).message}`);
   }
 
   const media = ctx.newMedia();
