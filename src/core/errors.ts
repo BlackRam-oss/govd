@@ -109,7 +109,7 @@ async function sendErrorMessage(bot: Bot<Context>, ctx: Context, errorId: string
 }
 
 const errorMessages: Record<string, string> = {
-  ErrorUnavailable: 'this content is unavailable',
+  ErrorUnavailable: 'this content is not available or private',
   ErrorTimeout: 'timeout error when downloading. try again later',
   ErrorUnsupportedImageFormat: 'unsupported image format',
   ErrorMediaAlbumLimitExceeded: 'media album limit exceeds the maximum allowed for this group',
