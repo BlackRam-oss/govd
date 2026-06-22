@@ -112,9 +112,9 @@ async function fetchItemStructFromAPI(contentId: string, cookies: string): Promi
   const body = await res.text();
   const contentType = res.headers.get('content-type') ?? '';
 
-  if (!body.trimStart().startsWith('{')) {
+  if (!contentType.includes('application/json') && !body.trimStart().startsWith('{')) {
     logger.warn({ apiStatus: res.status, contentType, snippet: body.slice(0, 500) }, 'tiktok: api returned non-json');
-    throw new Error(`api returned non-json (status ${res.status}, content-type: ${contentType})`);
+    throw new Error(`api returned non-json (status ${res.status})`);
   }
 
   const data = JSON.parse(body) as { statusCode?: number; itemInfo?: TikTokVideoDetail['itemInfo'] };
