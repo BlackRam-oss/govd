@@ -61,7 +61,7 @@ export async function settingsOptionsHandler(ctx: Context): Promise<void> {
       break;
     }
     case 'media_album': {
-      const keyboard = buildAlbumKeyboard(chat?.mediaAlbumLimit ?? 10, lang);
+      const keyboard = buildAlbumKeyboard(chat?.mediaAlbumLimit ?? 20, lang);
       await ctx.editMessageText(t('MediaAlbumSettingsMessage', lang), { reply_markup: keyboard });
       break;
     }

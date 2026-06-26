@@ -127,7 +127,7 @@ async function taskFromDatabase(ctx: ExtractorContext): Promise<TaskResult | nul
 
 function checkAlbumLimit(n: number, chat: ChatRow | null): void {
   if (chat?.type === ChatType.Group) {
-    if (n > (chat.mediaAlbumLimit || 10)) throw Errors.MediaAlbumLimitExceeded;
+    if (n > (chat.mediaAlbumLimit || 20)) throw Errors.MediaAlbumLimitExceeded;
   }
   if (n > 30) throw Errors.MediaAlbumGlobalLimitExceeded;
 }
