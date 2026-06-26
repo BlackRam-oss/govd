@@ -1,11 +1,19 @@
-import { Extractor, MediaFormat, DownloadSettings, ExtractorContext, Media } from '../../models/index.js';
+import { Extractor, MediaFormat, ExtractorContext, Media } from '../../models/index.js';
 import { MediaType, MediaCodec } from '../../database/index.js';
 import { Errors } from '../../util/index.js';
+import { Env } from '../../config/index.js';
 import logger from '../../logger/index.js';
 
 const instagramHost: string[] = ['instagram', 'ddinstagram'];
 
 // ── Header sets (mirrored from cobalt) ───────────────────────────────────────
+
+const commonHeaders: Record<string, string> = {
+  'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'sec-gpc': '1',
+  'sec-fetch-site': 'same-origin',
+  'x-ig-app-id': '936619743392459',
+};
 
 const mobileHeaders: Record<string, string> = {
   'x-ig-app-locale': 'en_US',
@@ -72,27 +80,28 @@ export const InstagramShareExtractor = new Extractor({
   },
 });
 
-// ── Mobile API (no auth) ──────────────────────────────────────────────────────
+// ── Mobile API ────────────────────────────────────────────────────────────────
 
-async function getMediaId(shortcode: string): Promise<string | null> {
+async function getMediaId(shortcode: string, cookie?: string): Promise<string | null> {
   try {
     const url = new URL('https://i.instagram.com/api/v1/oembed/');
     url.searchParams.set('url', `https://www.instagram.com/p/${shortcode}/`);
-    const resp = await fetch(url, { headers: mobileHeaders });
+    const headers: Record<string, string> = { ...mobileHeaders };
+    if (cookie) headers['cookie'] = cookie;
+    const resp = await fetch(url, { headers });
     const data = await resp.json() as any;
     if (data?.media_id) return String(data.media_id);
   } catch {
     // fall through to local decode
   }
-  // Shortcodes are base64url-encoded media IDs — decode locally as fallback.
   return shortcodeToMediaId(shortcode) || null;
 }
 
-async function requestMobileApi(mediaId: string): Promise<any | null> {
+async function requestMobileApi(mediaId: string, cookie?: string): Promise<any | null> {
   try {
-    const resp = await fetch(`https://i.instagram.com/api/v1/media/${mediaId}/info/`, {
-      headers: mobileHeaders,
-    });
+    const headers: Record<string, string> = { ...mobileHeaders };
+    if (cookie) headers['cookie'] = cookie;
+    const resp = await fetch(`https://i.instagram.com/api/v1/media/${mediaId}/info/`, { headers });
     const data = await resp.json() as any;
     return data?.items?.[0] ?? null;
   } catch {
@@ -100,13 +109,13 @@ async function requestMobileApi(mediaId: string): Promise<any | null> {
   }
 }
 
-// ── Embed HTML (no auth) ──────────────────────────────────────────────────────
+// ── Embed HTML ────────────────────────────────────────────────────────────────
 
-async function requestHTML(shortcode: string): Promise<any | null> {
+async function requestHTML(shortcode: string, cookie?: string): Promise<any | null> {
   try {
-    const resp = await fetch(`https://www.instagram.com/p/${shortcode}/embed/captioned/`, {
-      headers: embedHeaders,
-    });
+    const headers: Record<string, string> = { ...embedHeaders };
+    if (cookie) headers['cookie'] = cookie;
+    const resp = await fetch(`https://www.instagram.com/p/${shortcode}/embed/captioned/`, { headers });
     const html = await resp.text();
 
     const match = html.match(/"init",\[\],\[(.*?)\]\],/);
@@ -122,7 +131,7 @@ async function requestHTML(shortcode: string): Promise<any | null> {
   }
 }
 
-// ── GQL (no stored cookie — builds anon session from page HTML) ───────────────
+// ── GQL (builds anon or authenticated session from page HTML) ─────────────────
 
 function getNumberFromQuery(name: string, data: string): number | undefined {
   const s = data.match(new RegExp(name + '=(\\d+)'))?.[1];
@@ -134,11 +143,15 @@ function getObjectFromEntries(name: string, data: string): any | null {
   return obj ? JSON.parse(obj) : null;
 }
 
-async function getGQLParams(shortcode: string): Promise<{ headers: Record<string, string>; body: Record<string, any> } | null> {
+async function getGQLParams(
+  shortcode: string,
+  cookie?: string,
+): Promise<{ headers: Record<string, string>; body: Record<string, any> } | null> {
   try {
-    const resp = await fetch(`https://www.instagram.com/p/${shortcode}/`, {
-      headers: embedHeaders,
-    });
+    const reqHeaders: Record<string, string> = { ...embedHeaders };
+    if (cookie) reqHeaders['cookie'] = cookie;
+
+    const resp = await fetch(`https://www.instagram.com/p/${shortcode}/`, { headers: reqHeaders });
     const html = await resp.text();
 
     const siteData         = getObjectFromEntries('SiteData', html);
@@ -148,7 +161,8 @@ async function getGQLParams(shortcode: string): Promise<{ headers: Record<string
     const lsd              = getObjectFromEntries('LSD', html)?.token ?? randomB64(8);
     const csrf             = getObjectFromEntries('InstagramSecurityConfig', html)?.csrf_token;
 
-    const anonCookie = [
+    // When a session cookie is provided, use it directly; otherwise build an anon cookie.
+    const anonCookie = cookie ?? [
       csrf && `csrftoken=${csrf}`,
       polarisSiteData?.device_id && `ig_did=${polarisSiteData.device_id}`,
       'wd=1280x720',
@@ -193,9 +207,9 @@ async function getGQLParams(shortcode: string): Promise<{ headers: Record<string
   }
 }
 
-async function requestGQL(shortcode: string): Promise<{ gql_data: any } | null> {
+async function requestGQL(shortcode: string, cookie?: string): Promise<{ gql_data: any } | null> {
   try {
-    const params = await getGQLParams(shortcode);
+    const params = await getGQLParams(shortcode, cookie);
     if (!params) return null;
 
     const { headers, body } = params;
@@ -223,8 +237,8 @@ async function requestGQL(shortcode: string): Promise<{ gql_data: any } | null> 
       }).toString(),
     });
 
-    const data = (await resp.json() as any)?.data ?? null;
-    return data ? { gql_data: data } : null;
+    const gqlData = await resp.json().then((r: any) => r.data).catch(() => null);
+    return { gql_data: gqlData };
   } catch {
     return null;
   }
@@ -240,7 +254,7 @@ interface IgItem {
   height?: number;
 }
 
-// cobalt: hasData — truthy non-null gql_data means we got a GQL/embed response
+// cobalt: hasData — mobile API data (no gql_data key) also passes since undefined !== null
 function hasData(data: any): boolean {
   return data != null
     && data.gql_data !== null
@@ -288,7 +302,7 @@ function extractNewPost(data: any): IgItem[] {
 // GQL / embed format
 function extractOldPost(data: any): IgItem[] {
   const results: IgItem[] = [];
-  const sm = data?.gql_data?.shortcode_media ?? data?.gql_data?.xdt_shortcode_media ?? data?.media ?? data;
+  const sm = data?.gql_data?.shortcode_media ?? data?.gql_data?.xdt_shortcode_media;
   if (!sm) return results;
 
   const sidecar = sm.edge_sidecar_to_children;
@@ -340,56 +354,95 @@ function extractOldPost(data: any): IgItem[] {
   return results;
 }
 
-// ── Error context (cobalt: /ajax/bulk-route-definitions/) ────────────────────
+// ── Error context ─────────────────────────────────────────────────────────────
 
 async function getErrorContext(shortcode: string): Promise<Error | null> {
   try {
-    const body = new FormData();
-    body.append('route_urls', JSON.stringify([`https://www.instagram.com/p/${shortcode}/`]));
+    const params = await getGQLParams(shortcode);
+    if (!params) return null;
+
+    const { headers, body } = params;
+
     const resp = await fetch('https://www.instagram.com/ajax/bulk-route-definitions/', {
       method: 'POST',
-      headers: { ...embedHeaders },
-      body,
+      headers: {
+        ...embedHeaders,
+        ...headers,
+        'content-type': 'application/x-www-form-urlencoded',
+        'X-Ig-D': 'www',
+      },
+      body: new URLSearchParams({
+        'route_urls[0]': `/p/${shortcode}/`,
+        routing_namespace: 'igx_www',
+        ...body,
+      }).toString(),
     });
-    const json = await resp.json() as any;
-    const props = json?.payload?.payloads?.[`/p/${shortcode}/`]?.result?.exports?.rootView?.props;
-    if (!props) return null;
-    if (props.is_private) return Errors.AuthenticationNeeded;
-    if (props.viewer_has_age_restriction) return Errors.AgeRestricted;
-    return null;
+
+    const text = await resp.text();
+
+    if (text.includes('"tracePolicy":"polaris.privatePostPage"')) return Errors.AuthenticationNeeded;
+
+    const [, mediaId, mediaOwnerId] = text.match(
+      /"media_id":\s*?"(\d+)","media_owner_id":\s*?"(\d+)"/
+    ) || [];
+
+    if (mediaId && mediaOwnerId) {
+      const rulingURL = new URL('https://www.instagram.com/api/v1/web/get_ruling_for_media_content_logged_out');
+      rulingURL.searchParams.set('media_id', mediaId);
+      rulingURL.searchParams.set('owner_id', mediaOwnerId);
+      const ruling = await fetch(rulingURL, {
+        headers: { ...headers, ...commonHeaders },
+      }).then((r: any) => r.json()).catch(() => ({}));
+      if (ruling?.title?.includes('Restricted')) return Errors.AgeRestricted;
+    }
   } catch {
     return null;
   }
+  return null;
 }
 
 // ── Main post fetcher (mirrors cobalt's getPost flow) ─────────────────────────
 
 async function getPost(ctx: ExtractorContext): Promise<Media> {
   const shortcode = ctx.contentId;
+  const cookie = Env.InstagramCookies || undefined;
   let data: any = null;
 
   try {
-    // get media_id — oembed first, then local decode as fallback
     const mediaId = await getMediaId(shortcode);
     logger.info({ shortcode, mediaId }, 'instagram: mediaId resolved');
 
-    // mobile api (no cookie)
+    // — unauthenticated pass —
     if (mediaId && !hasData(data)) {
       data = await requestMobileApi(mediaId);
-      logger.info({ shortcode, mobileApiResult: data != null ? 'ok' : 'null' }, 'instagram: mobile API');
+      logger.info({ shortcode, result: data != null ? 'ok' : 'null' }, 'instagram: mobile API');
     }
-
-    // html embed (no cookie)
     if (!hasData(data)) {
       data = await requestHTML(shortcode);
-      logger.info({ shortcode, htmlResult: data != null ? 'ok' : 'null' }, 'instagram: html embed');
+      logger.info({ shortcode, result: data != null ? 'ok' : 'null' }, 'instagram: html embed');
     }
-
-    // graphql (anon session tokens from page)
     if (!hasData(data)) {
       const gql = await requestGQL(shortcode);
       if (gql) data = gql;
-      logger.info({ shortcode, gqlResult: gql != null ? 'ok' : 'null' }, 'instagram: GQL');
+      logger.info({ shortcode, result: hasData(data) ? 'ok' : 'null' }, 'instagram: GQL');
+    }
+
+    // — authenticated pass (only if all unauthenticated methods failed) —
+    if (!hasData(data) && cookie) {
+      logger.info({ shortcode }, 'instagram: falling back to cookie-authenticated methods');
+      if (mediaId) {
+        data = await requestMobileApi(mediaId, cookie);
+        logger.info({ shortcode, result: data != null ? 'ok' : 'null' }, 'instagram: mobile API (cookie)');
+      }
+      if (!hasData(data)) {
+        data = await requestHTML(shortcode, cookie);
+        logger.info({ shortcode, result: data != null ? 'ok' : 'null' }, 'instagram: html embed (cookie)');
+      }
+      if (!hasData(data)) {
+        const gql = await requestGQL(shortcode, cookie);
+        if (gql) data = gql;
+        logger.info({ shortcode, result: hasData(data) ? 'ok' : 'null' }, 'instagram: GQL (cookie)');
+      }
     }
   } catch (e) {
     logger.warn({ shortcode, err: (e as Error).message }, 'instagram: unexpected error during fetch');
@@ -397,7 +450,7 @@ async function getPost(ctx: ExtractorContext): Promise<Media> {
 
   // build items from whichever method succeeded
   let items: IgItem[] = [];
-  if (data?.gql_data != null) {
+  if (data?.gql_data) {
     items = extractOldPost(data);
     logger.info({ shortcode, itemCount: items.length }, 'instagram: resolved via GQL/embed');
   } else if (data != null) {
@@ -447,7 +500,6 @@ function randomB64(bytes: number): string {
   return btoa(String.fromCharCode(...arr)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
 }
 
-// Instagram shortcodes are base64url-encoded media IDs (alphabet A-Za-z0-9-_).
 function shortcodeToMediaId(shortcode: string): string {
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
   let n = 0n;

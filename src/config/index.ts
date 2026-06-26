@@ -65,6 +65,7 @@ interface EnvConfig {
   AutomaticLanguageDetection: boolean;
 
   TwitterBearerToken: string;
+  InstagramCookies: string;
 
   DownloadsDir: string;
 }
@@ -106,6 +107,7 @@ export const Env: EnvConfig = {
   AutomaticLanguageDetection: parseBoolEnv('AUTOMATIC_LANGUAGE_DETECTION', true),
 
   TwitterBearerToken: process.env.TWITTER_BEARER_TOKEN || '',
+  InstagramCookies: process.env.INSTAGRAM_COOKIES || '',
 
   DownloadsDir: path.resolve(process.env.DOWNLOADS_DIR || 'downloads'),
 };
