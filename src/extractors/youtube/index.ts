@@ -2,18 +2,40 @@ import { Innertube, Platform } from 'youtubei.js/cf-worker';
 import { Extractor, MediaFormat, Media, ExtractorContext } from '../../models/index.js';
 import { MediaType } from '../../database/index.js';
 import { parseVideoCodec, parseAudioCodec, Errors } from '../../util/index.js';
+import { Env } from '../../config/index.js';
 import logger from '../../logger/index.js';
 
 // CF Workers lacks eval() — provide a Function-based evaluator for n-sig deciphering.
-// The script is self-contained and ends with `return process(...)`.
 (Platform.shim as any).eval = async (data: { output: string }) =>
   new Function(data.output)();
+
+function parseNetscapeCookies(text: string): string {
+  const cookies: Record<string, string> = {};
+  for (const line of text.split('\n')) {
+    const t = line.trim();
+    if (!t || t.startsWith('#')) continue;
+    const parts = t.split('\t');
+    if (parts.length >= 7) cookies[parts[5]] = parts[6];
+  }
+  return Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join('; ');
+}
+
+function parseCookieEnv(raw: string): string {
+  if (!raw) return '';
+  const t = raw.trim();
+  return (t.startsWith('#') || t.includes('\t')) ? parseNetscapeCookies(t) : t;
+}
+
+const YOUTUBE_COOKIE = parseCookieEnv(Env.YouTubeCookies) || undefined;
 
 let innertube: Innertube | null = null;
 
 async function getInnertube(): Promise<Innertube> {
   if (!innertube) {
-    innertube = await Innertube.create({ retrieve_player: true });
+    innertube = await Innertube.create({
+      retrieve_player: true,
+      cookie: YOUTUBE_COOKIE,
+    });
   }
   return innertube;
 }
@@ -31,7 +53,7 @@ export const YouTubeExtractor = new Extractor({
 
 async function getMedia(ctx: ExtractorContext): Promise<Media> {
   const yt = await getInnertube();
-  logger.debug({ videoId: ctx.contentId }, 'youtube: fetching video info');
+  logger.debug({ videoId: ctx.contentId, withCookie: !!YOUTUBE_COOKIE }, 'youtube: fetching video info');
 
   const info = await yt.getInfo(ctx.contentId);
 
