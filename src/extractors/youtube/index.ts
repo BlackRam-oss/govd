@@ -1,8 +1,13 @@
-import { Innertube } from 'youtubei.js/cf-worker';
+import { Innertube, Platform } from 'youtubei.js/cf-worker';
 import { Extractor, MediaFormat, Media, ExtractorContext } from '../../models/index.js';
 import { MediaType } from '../../database/index.js';
 import { parseVideoCodec, parseAudioCodec, Errors } from '../../util/index.js';
 import logger from '../../logger/index.js';
+
+// CF Workers lacks eval() — provide a Function-based evaluator for n-sig deciphering.
+// The script is self-contained and ends with `return process(...)`.
+(Platform.shim as any).eval = async (data: { output: string }) =>
+  new Function(data.output)();
 
 let innertube: Innertube | null = null;
 
@@ -28,7 +33,6 @@ async function getMedia(ctx: ExtractorContext): Promise<Media> {
   const yt = await getInnertube();
   logger.debug({ videoId: ctx.contentId }, 'youtube: fetching video info');
 
-  // getInfo uses multiple clients to retrieve the full format list (including all muxed streams)
   const info = await yt.getInfo(ctx.contentId);
 
   if (
@@ -45,7 +49,7 @@ async function getMedia(ctx: ExtractorContext): Promise<Media> {
   const title = info.basic_info?.title ?? '';
   const duration = Math.round(info.basic_info?.duration ?? 0);
 
-  // Muxed streams (video + audio in a single file) — the only option without ffmpeg.
+  // Muxed streams (video + audio in one file) — only viable option without ffmpeg.
   // Sorted best-first: height desc, then bitrate desc.
   const muxed = [...(info.streaming_data?.formats ?? [])].sort((a, b) => {
     const h = (b.height ?? 0) - (a.height ?? 0);
