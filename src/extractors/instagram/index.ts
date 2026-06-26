@@ -60,11 +60,12 @@ export const InstagramExtractor = new Extractor({
 export const InstagramStoriesExtractor = new Extractor({
   id: 'instagram',
   displayName: 'Instagram Stories',
-  urlPattern: /https:\/\/(www\.)?(?:dd)?instagram\.com\/stories\/[a-zA-Z0-9._]+\/(?<id>\d+)/,
+  urlPattern: /https:\/\/(www\.)?(?:dd)?instagram\.com\/stories\/(?<username>[a-zA-Z0-9._]+)\/(?<id>\d+)/,
   host: instagramHost,
   hidden: true,
-  async getFunc(_ctx: ExtractorContext): Promise<{ media?: Media; url?: string }> {
-    throw Errors.InstagramStoriesUnsupported;
+  async getFunc(ctx: ExtractorContext): Promise<{ media?: Media; url?: string }> {
+    const media = await getStory(ctx);
+    return { media };
   },
 });
 
@@ -547,6 +548,118 @@ async function getPost(ctx: ExtractorContext): Promise<Media> {
     mi.addFormats(mf);
   }
 
+  return media;
+}
+
+// ── Stories ───────────────────────────────────────────────────────────────────
+
+let cachedDtsg: { token: string; until: number } | null = null;
+
+async function findDtsgId(cookie: string): Promise<string | null> {
+  if (cachedDtsg && Date.now() < cachedDtsg.until) return cachedDtsg.token;
+  try {
+    const html = await fetch('https://www.instagram.com/', {
+      headers: { ...commonHeaders, cookie },
+    }).then(r => r.text());
+    const token = html.match(/"dtsg":\{"token":"(.*?)"/)?.[1];
+    if (!token) return null;
+    cachedDtsg = { token, until: Date.now() + 86_390_000 };
+    return token;
+  } catch {
+    return null;
+  }
+}
+
+async function usernameToId(username: string, cookie: string): Promise<string | null> {
+  try {
+    const url = new URL('https://www.instagram.com/api/v1/users/web_profile_info/');
+    url.searchParams.set('username', username);
+    const csrf = extractCookieValue(cookie, 'csrftoken');
+    const data = await fetch(url, {
+      headers: {
+        ...commonHeaders,
+        'x-ig-www-claim': '0',
+        'x-csrftoken': csrf,
+        cookie,
+      },
+    }).then(r => r.json()) as any;
+    return data?.data?.user?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function getStory(ctx: ExtractorContext): Promise<Media> {
+  const storyId = ctx.contentId;
+  const username = ctx.matchGroups['username'] ?? '';
+  const rawCookie = INSTAGRAM_COOKIE || undefined;
+
+  if (!rawCookie) throw Errors.AuthenticationNeeded;
+
+  const cookie = await isCookieValid(rawCookie) ? rawCookie : null;
+  if (!cookie) throw Errors.AuthenticationNeeded;
+
+  const userId = await usernameToId(username, cookie);
+  if (!userId) throw Errors.Unavailable;
+
+  const dtsg = await findDtsgId(cookie);
+  if (!dtsg) throw Errors.Unavailable;
+
+  const csrf = extractCookieValue(cookie, 'csrftoken');
+
+  const resp = await fetch('https://www.instagram.com/api/graphql/', {
+    method: 'POST',
+    headers: {
+      ...commonHeaders,
+      'x-ig-www-claim': '0',
+      'x-csrftoken': csrf,
+      'content-type': 'application/x-www-form-urlencoded',
+      cookie,
+    },
+    body: new URLSearchParams({
+      fb_dtsg: dtsg,
+      jazoest: '26438',
+      variables: JSON.stringify({ reel_ids_arr: [userId] }),
+      server_timestamps: 'true',
+      doc_id: '25317500907894419',
+    }).toString(),
+  });
+
+  const json = await resp.json() as any;
+  const reelsMedia: any[] = json?.data?.xdt_api__v1__feed__reels_media?.reels_media ?? [];
+  const reel = reelsMedia.find((m: any) => m.id === userId);
+  const item = reel?.items?.find((m: any) => m.pk === storyId || String(m.pk) === storyId);
+
+  if (!item) throw Errors.Unavailable;
+
+  const media = ctx.newMedia();
+  const mi = media.newItem();
+  const mf = new MediaFormat();
+
+  if (item.video_versions?.length) {
+    const best = item.video_versions.reduce((a: any, b: any) =>
+      a.width * a.height < b.width * b.height ? b : a);
+    mf.url = [best.url];
+    mf.type = MediaType.Video;
+    mf.formatId = 'video';
+    mf.videoCodec = MediaCodec.Avc;
+    mf.audioCodec = MediaCodec.Aac;
+    mf.width = best.width ?? 0;
+    mf.height = best.height ?? 0;
+    const thumb = item.image_versions2?.candidates?.[0]?.url;
+    if (thumb) mf.thumbnailUrl = [thumb];
+  } else if (item.image_versions2?.candidates?.length) {
+    const img = item.image_versions2.candidates[0];
+    mf.url = [img.url];
+    mf.type = MediaType.Photo;
+    mf.formatId = 'photo';
+    mf.width = img.width ?? 0;
+    mf.height = img.height ?? 0;
+  } else {
+    throw Errors.Unavailable;
+  }
+
+  mi.addFormats(mf);
   return media;
 }
 
