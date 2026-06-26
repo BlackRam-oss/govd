@@ -33,5 +33,6 @@ CACHING = "true"
 CAPTIONS_HEADER = "<a href='{{url}}'>source</a> - @{{username}}"
 CAPTIONS_DESCRIPTION = "<blockquote>{{text}}</blockquote>"
 AUTOMATIC_LANGUAGE_DETECTION = "true"
-TWITTER_BEARER_TOKEN = ""
-INSTAGRAM_COOKIES = ""
+# TWITTER_BEARER_TOKEN e INSTAGRAM_COOKIES sono segreti: impostali con
+#   wrangler secret put TWITTER_BEARER_TOKEN
+#   wrangler secret put INSTAGRAM_COOKIES

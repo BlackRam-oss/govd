@@ -1,7 +1,7 @@
 import { Innertube } from 'youtubei.js/cf-worker';
 import { Extractor, MediaFormat, Media, ExtractorContext } from '../../models/index.js';
 import { MediaType } from '../../database/index.js';
-import { parseVideoCodec, parseAudioCodec } from '../../util/index.js';
+import { parseVideoCodec, parseAudioCodec, Errors } from '../../util/index.js';
 import logger from '../../logger/index.js';
 
 let innertube: Innertube | null = null;
@@ -26,59 +26,64 @@ export const YouTubeExtractor = new Extractor({
 
 async function getMedia(ctx: ExtractorContext): Promise<Media> {
   const yt = await getInnertube();
-  logger.debug({ videoId: ctx.contentId }, 'youtube: fetching via youtubei.js');
+  logger.debug({ videoId: ctx.contentId }, 'youtube: fetching video info');
 
-  const info = await yt.getBasicInfo(ctx.contentId);
+  // getInfo uses multiple clients to retrieve the full format list (including all muxed streams)
+  const info = await yt.getInfo(ctx.contentId);
 
-  if (info.playability_status?.status === 'AGE_CHECK_REQUIRED' ||
-      info.playability_status?.reason?.includes('age')) {
-    const { Errors } = await import('../../util/index.js');
+  if (
+    info.playability_status?.status === 'AGE_CHECK_REQUIRED' ||
+    info.playability_status?.reason?.includes('age')
+  ) {
     throw Errors.AgeRestricted;
   }
   if (info.playability_status?.status !== 'OK') {
-    throw new Error(`not playable: ${info.playability_status?.reason ?? info.playability_status?.status}`);
+    const reason = info.playability_status?.reason ?? info.playability_status?.status;
+    throw new Error(`not playable: ${reason}`);
   }
 
   const title = info.basic_info?.title ?? '';
-  const allFormats = [
-    ...(info.streaming_data?.adaptive_formats ?? []),
-    ...(info.streaming_data?.formats ?? []),
-  ];
+  const duration = Math.round(info.basic_info?.duration ?? 0);
+
+  // Muxed streams (video + audio in a single file) — the only option without ffmpeg.
+  // Sorted best-first: height desc, then bitrate desc.
+  const muxed = [...(info.streaming_data?.formats ?? [])].sort((a, b) => {
+    const h = (b.height ?? 0) - (a.height ?? 0);
+    return h !== 0 ? h : (b.average_bitrate ?? b.bitrate ?? 0) - (a.average_bitrate ?? a.bitrate ?? 0);
+  });
+
+  if (!muxed.length) throw Errors.Unavailable;
 
   const media = ctx.newMedia();
   media.setCaption(title);
   const item = media.newItem();
   let added = 0;
 
-  for (const fmt of allFormats) {
+  for (const fmt of muxed) {
     const url = await fmt.decipher(yt.session.player);
     if (!url) continue;
+
+    const videoCodec = parseVideoCodec(fmt.mime_type);
+    const audioCodec = parseAudioCodec(fmt.mime_type);
+    if (!videoCodec || !audioCodec) continue;
 
     const mf = new MediaFormat();
     mf.formatId = String(fmt.itag);
     mf.url = [url];
+    mf.type = MediaType.Video;
+    mf.videoCodec = videoCodec;
+    mf.audioCodec = audioCodec;
+    mf.width = fmt.width ?? 0;
+    mf.height = fmt.height ?? 0;
     mf.bitrate = fmt.average_bitrate ?? fmt.bitrate ?? 0;
     mf.fileSize = fmt.content_length ?? 0;
-    mf.duration = Math.round((fmt.approx_duration_ms ?? 0) / 1000);
-
-    if (fmt.has_video) {
-      mf.type = MediaType.Video;
-      mf.videoCodec = parseVideoCodec(fmt.mime_type);
-      mf.width = fmt.width ?? 0;
-      mf.height = fmt.height ?? 0;
-    } else {
-      mf.type = MediaType.Audio;
-    }
-    if (fmt.has_audio) {
-      mf.audioCodec = parseAudioCodec(fmt.mime_type);
-    }
-
-    if (mf.videoCodec || mf.audioCodec) {
-      item.addFormats(mf);
-      added++;
-    }
+    mf.duration = duration;
+    item.addFormats(mf);
+    added++;
   }
 
-  if (!added) throw new Error('no usable formats found');
+  if (!added) throw Errors.Unavailable;
+
+  logger.debug({ videoId: ctx.contentId, formats: added }, 'youtube: resolved');
   return media;
 }
