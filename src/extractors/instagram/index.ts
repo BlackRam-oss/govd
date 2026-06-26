@@ -354,6 +354,58 @@ function extractOldPost(data: any): IgItem[] {
   return results;
 }
 
+// ── Cookie parsing & validation ───────────────────────────────────────────────
+
+function parseNetscapeCookies(text: string): string {
+  const cookies: Record<string, string> = {};
+  for (const line of text.split('\n')) {
+    const t = line.trim();
+    if (!t || t.startsWith('#')) continue;
+    const parts = t.split('\t');
+    if (parts.length >= 7) cookies[parts[5]] = parts[6];
+  }
+  return Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join('; ');
+}
+
+function parseCookieEnv(raw: string): string {
+  if (!raw) return '';
+  const t = raw.trim();
+  return (t.startsWith('#') || t.includes('\t')) ? parseNetscapeCookies(t) : t;
+}
+
+const INSTAGRAM_COOKIE = parseCookieEnv(Env.InstagramCookies);
+
+function extractCookieValue(header: string, name: string): string {
+  for (const part of header.split(';')) {
+    const t = part.trim();
+    if (t.startsWith(name + '=')) return t.slice(name.length + 1);
+  }
+  return '';
+}
+
+let cookieCache: { valid: boolean; until: number } | null = null;
+
+async function isCookieValid(cookie: string): Promise<boolean> {
+  if (cookieCache && Date.now() < cookieCache.until) return cookieCache.valid;
+  try {
+    const userId = extractCookieValue(cookie, 'ds_user_id');
+    if (!userId) {
+      cookieCache = { valid: false, until: Date.now() + 60_000 };
+      return false;
+    }
+    const resp = await fetch(`https://i.instagram.com/api/v1/users/${userId}/info/`, {
+      headers: { ...mobileHeaders, cookie },
+    });
+    const data = await resp.json() as any;
+    const valid = data?.status === 'ok';
+    cookieCache = { valid, until: Date.now() + (valid ? 5 * 60_000 : 60_000) };
+    return valid;
+  } catch {
+    cookieCache = { valid: false, until: Date.now() + 60_000 };
+    return false;
+  }
+}
+
 // ── Error context ─────────────────────────────────────────────────────────────
 
 async function getErrorContext(shortcode: string): Promise<Error | null> {
@@ -405,31 +457,19 @@ async function getErrorContext(shortcode: string): Promise<Error | null> {
 
 async function getPost(ctx: ExtractorContext): Promise<Media> {
   const shortcode = ctx.contentId;
-  const cookie = Env.InstagramCookies || undefined;
+  const rawCookie = INSTAGRAM_COOKIE || undefined;
   let data: any = null;
 
   try {
-    const mediaId = await getMediaId(shortcode);
-    logger.info({ shortcode, mediaId }, 'instagram: mediaId resolved');
+    // Validate cookie once (cached for 5 min if valid, 1 min if not)
+    const cookie = rawCookie && await isCookieValid(rawCookie) ? rawCookie : undefined;
+    if (rawCookie && !cookie) logger.warn({ shortcode }, 'instagram: cookie non valido o scaduto');
 
-    // — unauthenticated pass —
-    if (mediaId && !hasData(data)) {
-      data = await requestMobileApi(mediaId);
-      logger.info({ shortcode, result: data != null ? 'ok' : 'null' }, 'instagram: mobile API');
-    }
-    if (!hasData(data)) {
-      data = await requestHTML(shortcode);
-      logger.info({ shortcode, result: data != null ? 'ok' : 'null' }, 'instagram: html embed');
-    }
-    if (!hasData(data)) {
-      const gql = await requestGQL(shortcode);
-      if (gql) data = gql;
-      logger.info({ shortcode, result: hasData(data) ? 'ok' : 'null' }, 'instagram: GQL');
-    }
+    const mediaId = await getMediaId(shortcode, cookie);
+    logger.info({ shortcode, mediaId, withCookie: !!cookie }, 'instagram: mediaId resolved');
 
-    // — authenticated pass (only if all unauthenticated methods failed) —
-    if (!hasData(data) && cookie) {
-      logger.info({ shortcode }, 'instagram: falling back to cookie-authenticated methods');
+    if (cookie) {
+      // — authenticated pass: cookie is valid, use it directly —
       if (mediaId) {
         data = await requestMobileApi(mediaId, cookie);
         logger.info({ shortcode, result: data != null ? 'ok' : 'null' }, 'instagram: mobile API (cookie)');
@@ -442,6 +482,24 @@ async function getPost(ctx: ExtractorContext): Promise<Media> {
         const gql = await requestGQL(shortcode, cookie);
         if (gql) data = gql;
         logger.info({ shortcode, result: hasData(data) ? 'ok' : 'null' }, 'instagram: GQL (cookie)');
+      }
+    }
+
+    // — unauthenticated pass: no cookie, or cookie methods failed —
+    if (!hasData(data)) {
+      if (cookie) logger.info({ shortcode }, 'instagram: metodi con cookie falliti, provo senza');
+      if (mediaId) {
+        data = await requestMobileApi(mediaId);
+        logger.info({ shortcode, result: data != null ? 'ok' : 'null' }, 'instagram: mobile API');
+      }
+      if (!hasData(data)) {
+        data = await requestHTML(shortcode);
+        logger.info({ shortcode, result: data != null ? 'ok' : 'null' }, 'instagram: html embed');
+      }
+      if (!hasData(data)) {
+        const gql = await requestGQL(shortcode);
+        if (gql) data = gql;
+        logger.info({ shortcode, result: hasData(data) ? 'ok' : 'null' }, 'instagram: GQL');
       }
     }
   } catch (e) {
