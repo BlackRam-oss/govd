@@ -14,6 +14,7 @@ import { PinterestExtractor, PinterestShortExtractor } from './pinterest/index.j
 import { SoundCloudExtractor, SoundCloudShortExtractor } from './soundcloud/index.js';
 import { NineGagExtractor } from './ninegag/index.js';
 import { ThreadsExtractor } from './threads/index.js';
+import { NoodleMagazineExtractor } from './noodlemagazine/index.js';
 
 export const Extractors: Extractor[] = [
   FacebookShareExtractor,
@@ -34,6 +35,7 @@ export const Extractors: Extractor[] = [
   RedditExtractor,
   RedditShortExtractor,
   ThreadsExtractor,
+  NoodleMagazineExtractor,
 ];
 
 const MAX_REDIRECTS = 5;

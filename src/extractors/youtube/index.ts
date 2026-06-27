@@ -1,13 +1,16 @@
 import { Innertube, Platform } from 'youtubei.js/cf-worker';
-import { Extractor, MediaFormat, Media, ExtractorContext } from '../../models/index.js';
+import { Extractor, MediaFormat, DownloadSettings, Media, ExtractorContext } from '../../models/index.js';
 import { MediaType } from '../../database/index.js';
 import { parseVideoCodec, parseAudioCodec, Errors } from '../../util/index.js';
 import { Env } from '../../config/index.js';
 import logger from '../../logger/index.js';
 
-// CF Workers lacks eval() — provide a Function-based evaluator for n-sig deciphering.
+// Enable decipher: Platform.shim.eval runs the player JS that transforms the n-param.
+// Requires unsafe_eval in CF Workers compatibility_flags; fmt.url fallback used if decipher throws.
 (Platform.shim as any).eval = async (data: { output: string }) =>
   new Function(data.output)();
+
+const downloadHeaders = { Referer: 'https://www.youtube.com/' };
 
 function parseNetscapeCookies(text: string): string {
   const cookies: Record<string, string> = {};
@@ -86,7 +89,14 @@ async function getMedia(ctx: ExtractorContext): Promise<Media> {
   let added = 0;
 
   for (const fmt of muxed) {
-    const url = await fmt.decipher(yt.session.player);
+    // Try decipher (transforms the n-param for full-speed CDN access).
+    // Falls back to fmt.url when new Function() is unavailable (CF Workers without unsafe_eval).
+    let url: string | null = null;
+    try {
+      url = await fmt.decipher(yt.session.player);
+    } catch {
+      url = fmt.url ?? null;
+    }
     if (!url) continue;
 
     const videoCodec = parseVideoCodec(fmt.mime_type);
@@ -104,6 +114,7 @@ async function getMedia(ctx: ExtractorContext): Promise<Media> {
     mf.bitrate = fmt.average_bitrate ?? fmt.bitrate ?? 0;
     mf.fileSize = fmt.content_length ?? 0;
     mf.duration = duration;
+    mf.downloadSettings = new DownloadSettings({ headers: downloadHeaders });
     item.addFormats(mf);
     added++;
   }
