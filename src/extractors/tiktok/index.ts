@@ -1,7 +1,27 @@
 import { Extractor, MediaFormat, DownloadSettings, ExtractorContext, Media } from '../../models/index.js';
 import { MediaType, MediaCodec } from '../../database/index.js';
 import { Errors } from '../../util/index.js';
+import { Env } from '../../config/index.js';
 import logger from '../../logger/index.js';
+
+function parseNetscapeCookies(text: string): string {
+  const cookies: Record<string, string> = {};
+  for (const line of text.split('\n')) {
+    const t = line.trim();
+    if (!t || t.startsWith('#')) continue;
+    const parts = t.split('\t');
+    if (parts.length >= 7) cookies[parts[5]] = parts[6];
+  }
+  return Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join('; ');
+}
+
+function parseCookieEnv(raw: string): string {
+  if (!raw) return '';
+  const t = raw.trim();
+  return (t.startsWith('#') || t.includes('\t')) ? parseNetscapeCookies(t) : t;
+}
+
+const TIKTOK_COOKIE = parseCookieEnv(Env.TikTokCookies) || undefined;
 
 // Same UA as cobalt — stripped for redirect, full for page fetch
 const UA_FULL = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
@@ -66,18 +86,21 @@ export const TikTokExtractor = new Extractor({
 });
 
 async function getMedia(ctx: ExtractorContext): Promise<Media> {
+  const reqHeaders: Record<string, string> = {
+    'user-agent': UA_FULL,
+    'accept-language': 'en-US,en;q=0.9',
+    'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'referer': 'https://www.tiktok.com/',
+  };
+  if (TIKTOK_COOKIE) reqHeaders['cookie'] = TIKTOK_COOKIE;
+
   // cobalt: always use @i/video/ path, even for photo posts
   const res = await fetch(`https://www.tiktok.com/@i/video/${ctx.contentId}`, {
-    headers: {
-      'user-agent': UA_FULL,
-      'accept-language': 'en-US,en;q=0.9',
-      'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      'referer': 'https://www.tiktok.com/',
-    },
+    headers: reqHeaders,
   });
 
-  // Accumulate cookies for CDN auth
-  const cookieHeader = mergeCookies('', getSetCookies(res.headers));
+  // Merge response cookies on top of our initial cookie (for CDN auth)
+  const cookieHeader = mergeCookies(TIKTOK_COOKIE ?? '', getSetCookies(res.headers));
 
   const html = await res.text();
 

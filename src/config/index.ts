@@ -67,6 +67,7 @@ interface EnvConfig {
   TwitterBearerToken: string;
   InstagramCookies: string;
   YouTubeCookies: string;
+  TikTokCookies: string;
 
   DownloadsDir: string;
 }
@@ -110,6 +111,7 @@ export const Env: EnvConfig = {
   TwitterBearerToken: process.env.TWITTER_BEARER_TOKEN || '',
   InstagramCookies: process.env.INSTAGRAM_COOKIES || '',
   YouTubeCookies: process.env.YOUTUBE_COOKIES || '',
+  TikTokCookies: process.env.TIKTOK_COOKIES || '',
 
   DownloadsDir: path.resolve(process.env.DOWNLOADS_DIR || 'downloads'),
 };
