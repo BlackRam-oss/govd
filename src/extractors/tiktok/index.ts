@@ -23,11 +23,14 @@ function parseCookieEnv(raw: string): string {
 
 const TIKTOK_COOKIE = parseCookieEnv(Env.TikTokCookies) || undefined;
 
-// Android Dalvik UA bypasses TikTok's SlardarWAF (triggered by Chrome desktop UA).
-// Desktop Chrome UAs consistently receive a 1155-byte JS challenge that servers cannot solve.
-const UA_ANDROID = 'Dalvik/2.1.0 (Linux; U; Android 10; SM-G975U Build/QP1A.190711.020)';
-// Short UA for VM redirect resolution only
+// UA for VM short-link resolution only (follow redirect)
 const UA_SHORT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36';
+
+// UA for page fetch when NO session cookies are configured.
+// Authenticated sessions (with cookie): omit UA entirely → webapp.video-detail (full bitrateInfo).
+// Anonymous (no cookie): Dalvik UA → webapp.reflow.video.detail (basic playAddr).
+// Chrome/desktop UA always triggers SlardarWAF from server IPs, regardless of cookies.
+const UA_ANON = 'Dalvik/2.1.0 (Linux; U; Android 10; SM-G975U Build/QP1A.190711.020)';
 
 export const TikTokVMExtractor = new Extractor({
   id: 'tiktok',
@@ -41,9 +44,7 @@ export const TikTokVMExtractor = new Extractor({
       headers: { 'user-agent': UA_SHORT },
     });
 
-    let url: string | null = null;
-
-    url = res.headers.get('location');
+    let url: string | null = res.headers.get('location');
 
     if (!url) {
       const body = await res.text().catch(() => '');
@@ -54,7 +55,6 @@ export const TikTokVMExtractor = new Extractor({
     }
 
     if (!url) url = res.url !== ctx.contentUrl ? res.url : null;
-
     if (!url) throw new Error('could not resolve short tiktok url');
 
     try {
@@ -85,25 +85,22 @@ export const TikTokExtractor = new Extractor({
 });
 
 async function getMedia(ctx: ExtractorContext): Promise<Media> {
+  // With session cookies: omit UA → TikTok returns webapp.video-detail (full bitrateInfo, no WAF).
+  // Without cookies: use Dalvik UA → TikTok returns webapp.reflow.video.detail (basic playAddr).
   const reqHeaders: Record<string, string> = {
-    'user-agent': UA_ANDROID,
     'accept-language': 'en-US,en;q=0.9',
     'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
     'referer': 'https://www.tiktok.com/',
   };
+  if (!TIKTOK_COOKIE) reqHeaders['user-agent'] = UA_ANON;
   if (TIKTOK_COOKIE) reqHeaders['cookie'] = TIKTOK_COOKIE;
 
-  // Use @i/video/{id} — avoids username lookup and works with both UA types.
   const fetchUrl = `https://www.tiktok.com/@i/video/${ctx.contentId}`;
-
   const res = await fetch(fetchUrl, { headers: reqHeaders });
 
-  // Merge response cookies with user cookies (needed for CDN video download)
   const cookieHeader = mergeCookies(TIKTOK_COOKIE ?? '', getSetCookies(res.headers));
-
   const html = await res.text();
 
-  // Detect login redirect
   try {
     if (res.url && new URL(res.url).pathname.startsWith('/login')) {
       throw Errors.AuthenticationNeeded;
@@ -120,28 +117,31 @@ async function getMedia(ctx: ExtractorContext): Promise<Media> {
     if (!json) {
       const isWAF = html.includes('SlardarWAF') || html.length < 2000;
       logger.warn({ status: res.status, size: html.length, isWAF, hasCookie: !!TIKTOK_COOKIE }, 'tiktok: universal data script not found');
-      if (isWAF) throw new Error('tiktok WAF challenge — IP blocked or UA fingerprinted');
+      if (isWAF) throw new Error('tiktok WAF — add TIKTOK_COOKIES secret or try a different proxy');
       throw new Error('universal data script not found');
     }
 
     const data = JSON.parse(json) as Record<string, unknown>;
     const scope = data['__DEFAULT_SCOPE__'] as Record<string, unknown>;
 
-    // Android Dalvik UA → webapp.reflow.video.detail; desktop Chrome UA → webapp.video-detail
-    const reflowDetail = scope?.['webapp.reflow.video.detail'] as TikTokReflowDetail | undefined;
+    // Authenticated (no UA + cookies) → webapp.video-detail with bitrateInfo
+    // Anonymous (Dalvik UA, no cookies) → webapp.reflow.video.detail with basic playAddr
     const videoDetail = scope?.['webapp.video-detail'] as TikTokVideoDetail | undefined;
+    const reflowDetail = scope?.['webapp.reflow.video.detail'] as TikTokReflowDetail | undefined;
 
     let itemStruct: TikTokItemStruct | undefined;
 
-    if (reflowDetail) {
-      if (reflowDetail.statusCode !== 0) throw Errors.Unavailable;
-      itemStruct = reflowDetail.itemInfo?.itemStruct;
-    } else if (videoDetail) {
+    if (videoDetail) {
       if (videoDetail.statusMsg) throw Errors.Unavailable;
       if (videoDetail.itemInfo?.statusMsg) throw Errors.Unavailable;
       itemStruct = videoDetail.itemInfo?.itemStruct;
+    } else if (reflowDetail) {
+      if (reflowDetail.statusCode !== 0) throw Errors.Unavailable;
+      itemStruct = reflowDetail.itemInfo?.itemStruct;
     } else {
-      throw new Error('no video detail scope found');
+      const keys = Object.keys(scope || {});
+      logger.warn({ keys, hasCookie: !!TIKTOK_COOKIE }, 'tiktok: no video detail scope found');
+      throw new Error(`no video detail scope (got: ${keys.slice(0, 3).join(', ')})`);
     }
 
     if (!itemStruct) throw new Error('itemStruct not found');
@@ -173,13 +173,10 @@ async function getMedia(ctx: ExtractorContext): Promise<Media> {
     const video = detail.video;
     if (!video) throw Errors.Unavailable;
 
-    // TikTok API formats:
-    //   Reflow (Android UA): playAddr = string URL, no bitrateInfo
-    //   Desktop (Chrome UA): playAddr = string or {uri, urlList}, bitrateInfo available
     const playAddrObj = typeof video.playAddr === 'object' ? video.playAddr : null;
     const playAddrStruct = video.PlayAddrStruct;
-
     const bitrateEntries = video.bitrateInfo ?? [];
+
     const h264Entry = bitrateEntries.find(
       b => b.CodecType && !b.CodecType.includes('h265') && !b.CodecType.includes('bytevc1')
     );
@@ -219,10 +216,8 @@ async function getMedia(ctx: ExtractorContext): Promise<Media> {
     for (const image of (detail.imagePost?.images ?? [])) {
       const urlList = image.imageURL?.urlList ?? [];
       if (!urlList.length) continue;
-
       const url = urlList.find(u => u.includes('.jpeg?')) ?? urlList[0];
       if (!url) continue;
-
       const item = media.newItem();
       const mf = new MediaFormat();
       mf.type = MediaType.Photo;
@@ -234,7 +229,6 @@ async function getMedia(ctx: ExtractorContext): Promise<Media> {
   }
 
   if (!media.items.length) throw Errors.Unavailable;
-
   return media;
 }
 
@@ -249,13 +243,15 @@ function getSetCookies(headers: Headers): string[] {
 function mergeCookies(existing: string, setCookies: string[]): string {
   const map: Record<string, string> = {};
   for (const pair of existing.split(';').map(s => s.trim()).filter(Boolean)) {
-    const [k, ...v] = pair.split('=');
-    map[k.trim()] = v.join('=').trim();
+    const i = pair.indexOf('=');
+    if (i < 0) continue;
+    map[pair.slice(0, i).trim()] = pair.slice(i + 1).trim();
   }
   for (const header of setCookies) {
-    const [pair] = header.split(';');
-    const [k, ...v] = pair.split('=');
-    map[k.trim()] = v.join('=').trim();
+    const [part] = header.split(';');
+    const i = part.indexOf('=');
+    if (i < 0) continue;
+    map[part.slice(0, i).trim()] = part.slice(i + 1).trim();
   }
   return Object.entries(map).map(([k, v]) => `${k}=${v}`).join('; ');
 }
@@ -304,7 +300,7 @@ interface TikTokItemStruct {
   author?: { uniqueId?: string };
 }
 
-// Desktop Chrome UA response
+// Authenticated response (no UA + session cookies): webapp.video-detail
 interface TikTokVideoDetail {
   statusMsg?: string;
   itemInfo?: {
@@ -313,7 +309,7 @@ interface TikTokVideoDetail {
   };
 }
 
-// Android Dalvik UA response (different scope key: webapp.reflow.video.detail)
+// Anonymous response (Dalvik UA, no cookies): webapp.reflow.video.detail
 interface TikTokReflowDetail {
   statusCode: number;
   statusMessage?: string;
