@@ -94,8 +94,9 @@ async function getMedia(ctx: ExtractorContext): Promise<Media> {
   };
   if (TIKTOK_COOKIE) reqHeaders['cookie'] = TIKTOK_COOKIE;
 
-  // cobalt: always use @i/video/ path, even for photo posts
-  const res = await fetch(`https://www.tiktok.com/@i/video/${ctx.contentId}`, {
+  // Use the original URL (preserves @username/video/{id} path).
+  // @i/video/{id} shortcut now hits a WAF challenge for server IPs.
+  const res = await fetch(ctx.contentUrl, {
     headers: reqHeaders,
   });
 
@@ -155,14 +156,20 @@ async function getMedia(ctx: ExtractorContext): Promise<Media> {
     postId: ctx.contentId,
     isImageSlide,
     imageCount: detail.imagePost?.images?.length ?? 0,
-    hasVideo: !!detail.video?.playAddr,
+    hasVideo: !!detail.video,
   }, 'tiktok: media type detected');
 
   if (!isImageSlide) {
     const video = detail.video;
-    if (!video?.playAddr) throw Errors.Unavailable;
+    if (!video) throw Errors.Unavailable;
 
-    // Prefer H.264 from bitrateInfo; fall back to H.265, then playAddr
+    // TikTok API formats:
+    //   Old: playAddr = { uri, urlList, width, height }
+    //   New: playAddr = string URL, PlayAddrStruct = { Uri, UrlList, Width, Height }
+    const playAddrObj = typeof video.playAddr === 'object' ? video.playAddr : null;
+    const playAddrStruct = video.PlayAddrStruct;
+
+    // Prefer H.264 from bitrateInfo; fall back to H.265, then PlayAddrStruct/playAddr
     const bitrateEntries = video.bitrateInfo ?? [];
     const h264Entry = bitrateEntries.find(
       b => b.CodecType && !b.CodecType.includes('h265') && !b.CodecType.includes('bytevc1')
@@ -172,22 +179,30 @@ async function getMedia(ctx: ExtractorContext): Promise<Media> {
     );
 
     const bestEntry = h264Entry ?? h265Entry;
-    const urls: string[] =
-      bestEntry?.PlayAddr?.UrlList?.length
-        ? bestEntry.PlayAddr.UrlList
-        : (video.playAddr.urlList ?? []);
+    let urls: string[];
+    if (bestEntry?.PlayAddr?.UrlList?.length) {
+      urls = bestEntry.PlayAddr.UrlList;
+    } else if (playAddrStruct?.UrlList?.length) {
+      urls = playAddrStruct.UrlList;
+    } else if (playAddrObj?.urlList?.length) {
+      urls = playAddrObj.urlList;
+    } else if (typeof video.playAddr === 'string' && video.playAddr) {
+      urls = [video.playAddr];
+    } else {
+      urls = [];
+    }
 
     if (!urls.length) throw Errors.Unavailable;
 
     const item = media.newItem();
     const mf = new MediaFormat();
     mf.type = MediaType.Video;
-    mf.formatId = video.playAddr.uri || 'video';
+    mf.formatId = video.videoID || playAddrStruct?.Uri || playAddrObj?.uri || 'video';
     mf.url = urls;
     mf.videoCodec = MediaCodec.Avc;
     mf.audioCodec = MediaCodec.Aac;
-    mf.width = video.playAddr.width ?? 0;
-    mf.height = video.playAddr.height ?? 0;
+    mf.width = video.width ?? playAddrStruct?.Width ?? bestEntry?.PlayAddr?.Width ?? playAddrObj?.width ?? 0;
+    mf.height = video.height ?? playAddrStruct?.Height ?? bestEntry?.PlayAddr?.Height ?? playAddrObj?.height ?? 0;
     mf.duration = video.duration ?? 0;
     mf.downloadSettings = new DownloadSettings({ headers: downloadHeaders });
     item.addFormats(mf);
@@ -247,13 +262,26 @@ interface TikTokPlayAddr {
   height?: number;
 }
 
+// New format (2025+): playAddr is a plain URL string; struct is separate
+interface TikTokPlayAddrStruct {
+  Uri?: string;
+  UrlList?: string[];
+  Width?: number;
+  Height?: number;
+}
+
 interface TikTokBitrateInfo {
   CodecType?: string;
-  PlayAddr?: { UrlList?: string[] };
+  PlayAddr?: { UrlList?: string[]; Width?: number; Height?: number };
 }
 
 interface TikTokVideo {
-  playAddr?: TikTokPlayAddr;
+  // Old format: object; new format: plain URL string
+  playAddr?: TikTokPlayAddr | string;
+  PlayAddrStruct?: TikTokPlayAddrStruct;
+  videoID?: string;
+  width?: number;
+  height?: number;
   duration?: number;
   bitrateInfo?: TikTokBitrateInfo[];
 }
