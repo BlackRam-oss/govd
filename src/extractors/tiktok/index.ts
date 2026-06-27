@@ -26,10 +26,12 @@ const TIKTOK_COOKIE = parseCookieEnv(Env.TikTokCookies) || undefined;
 // UA for VM short-link resolution only (follow redirect)
 const UA_SHORT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36';
 
-// UA for page fetch when NO session cookies are configured.
-// Authenticated sessions (with cookie): omit UA entirely → webapp.video-detail (full bitrateInfo).
-// Anonymous (no cookie): Dalvik UA → webapp.reflow.video.detail (basic playAddr).
-// Chrome/desktop UA always triggers SlardarWAF from server IPs, regardless of cookies.
+// UA matrix (tested with real cookies from CF Workers egress IPs):
+//   Firefox UA + cookies  → webapp.video-detail (full bitrateInfo) ✓
+//   Dalvik UA + no cookie → webapp.reflow.video.detail (basic playAddr) ✓
+//   Chrome/* UA (any)     → SlardarWAF 1155-byte challenge ✗
+//   empty/omitted UA      → 403 empty body from CF Workers ✗
+const UA_AUTH = 'Mozilla/5.0 (X11; Linux x86_64; rv:127.0) Gecko/20100101 Firefox/127.0';
 const UA_ANON = 'Dalvik/2.1.0 (Linux; U; Android 10; SM-G975U Build/QP1A.190711.020)';
 
 export const TikTokVMExtractor = new Extractor({
@@ -85,14 +87,14 @@ export const TikTokExtractor = new Extractor({
 });
 
 async function getMedia(ctx: ExtractorContext): Promise<Media> {
-  // With session cookies: omit UA → TikTok returns webapp.video-detail (full bitrateInfo, no WAF).
-  // Without cookies: use Dalvik UA → TikTok returns webapp.reflow.video.detail (basic playAddr).
+  // UA selection: Firefox for authenticated sessions, Dalvik for anonymous.
+  // Omitting UA or sending empty string causes 403 from CF Workers egress IPs.
   const reqHeaders: Record<string, string> = {
+    'user-agent': TIKTOK_COOKIE ? UA_AUTH : UA_ANON,
     'accept-language': 'en-US,en;q=0.9',
     'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
     'referer': 'https://www.tiktok.com/',
   };
-  if (!TIKTOK_COOKIE) reqHeaders['user-agent'] = UA_ANON;
   if (TIKTOK_COOKIE) reqHeaders['cookie'] = TIKTOK_COOKIE;
 
   const fetchUrl = `https://www.tiktok.com/@i/video/${ctx.contentId}`;
