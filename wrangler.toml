@@ -1,7 +1,7 @@
 name = "govd"
 main = "src/index.ts"          # <-- cambia se il tuo entry point è diverso (es. dist/index.js)
 compatibility_date = "2026-06-10"
-compatibility_flags = [ "nodejs_compat", "unsafe_eval" ]
+compatibility_flags = [ "nodejs_compat" ]
 
 [observability.logs]
 enabled = true
@@ -33,8 +33,7 @@ CACHING = "true"
 CAPTIONS_HEADER = "<a href='{{url}}'>source</a> - @{{username}}"
 CAPTIONS_DESCRIPTION = "<blockquote>{{text}}</blockquote>"
 AUTOMATIC_LANGUAGE_DETECTION = "true"
-# TWITTER_BEARER_TOKEN, INSTAGRAM_COOKIES, YOUTUBE_COOKIES e TIKTOK_COOKIES sono segreti: impostali con
+# Segreti — impostali con wrangler secret put <NOME>:
 #   wrangler secret put TWITTER_BEARER_TOKEN
 #   wrangler secret put INSTAGRAM_COOKIES
-#   wrangler secret put YOUTUBE_COOKIES
 #   wrangler secret put TIKTOK_COOKIES

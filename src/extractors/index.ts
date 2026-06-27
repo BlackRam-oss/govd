@@ -4,7 +4,6 @@ import { newHTTPClient } from '../networking/index.js';
 import { extractBaseHost, getNamedGroups } from '../util/index.js';
 import logger from '../logger/index.js';
 
-import { YouTubeExtractor } from './youtube/index.js';
 import { TwitterExtractor, TwitterShortExtractor } from './twitter/index.js';
 import { TikTokExtractor, TikTokVMExtractor } from './tiktok/index.js';
 import { InstagramExtractor, InstagramStoriesExtractor, InstagramShareExtractor } from './instagram/index.js';
@@ -28,7 +27,6 @@ export const Extractors: Extractor[] = [
   InstagramStoriesExtractor,
   InstagramShareExtractor,
   NineGagExtractor,
-  YouTubeExtractor,
   PinterestShortExtractor,
   PinterestExtractor,
   RedditExtractor,
